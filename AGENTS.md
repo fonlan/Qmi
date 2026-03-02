@@ -21,6 +21,7 @@
 - Minimize / maximize / close buttons are custom-drawn in the top-right of the image viewport.
 - Areas outside the image viewport are rendered as 50% translucent overlays/panels.
 - Image drag/pan starts only when left click is on the currently visible image content (not just anywhere in viewport).
+- Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
 - Mouse wheel zoom is cursor-anchored and active only inside image viewport.
 - Bottom filmstrip shows sibling images in current directory; click thumbnail to switch.
 - Right-click context menu: `Open image...`, `Settings...`, `Exit`.
@@ -88,8 +89,8 @@ Build output executable:
 
 ## Known Limitations
 
-- Main window does not currently expose a dedicated client-area drag-to-move region (`HTCAPTION` path removed).
 - Filmstrip thumbnails for SVG files are text placeholders (no SVG thumbnail rasterization).
 
 ## Documentation Sync Rules
 - Every time you implement a new function or adjust a function, you need to check whether there are relevant instructions in `AGENTS.md`. If not, you need to add them.
+- After each completed implementation or code adjustment, you must run a build to verify the project still compiles.

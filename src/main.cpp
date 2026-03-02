@@ -1494,14 +1494,22 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 return 0;
             }
 
+            bool point_over_visible_image = false;
             if (d2d_context_) {
                 const D2D1_SIZE_F size = d2d_context_->GetSize();
                 const D2D1_RECT_F viewport = GetImageViewport(size.width, size.height);
-                if (IsPointOverVisibleImage(pt, viewport)) {
-                    dragging_image_ = true;
-                    drag_last_ = pt;
-                    SetCapture(hwnd_);
-                }
+                point_over_visible_image = IsPointOverVisibleImage(pt, viewport);
+            }
+
+            if (point_over_visible_image) {
+                dragging_image_ = true;
+                drag_last_ = pt;
+                SetCapture(hwnd_);
+            } else {
+                POINT screen_pt = pt;
+                ClientToScreen(hwnd_, &screen_pt);
+                ReleaseCapture();
+                SendMessageW(hwnd_, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(screen_pt.x, screen_pt.y));
             }
             return 0;
         }
