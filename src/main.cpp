@@ -61,11 +61,13 @@ constexpr UINT kMenuExit = 1003;
 constexpr int kCtrlFitOnSwitch = 2001;
 constexpr int kCtrlSmoothSampling = 2002;
 
-constexpr int kTopBarHeight = 44;
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
 constexpr int kResizeBorder = 8;
 constexpr int kTitleButtonWidth = 46;
+constexpr int kTitleButtonHeight = 34;
+constexpr float kViewportMargin = 12.0f;
+constexpr float kViewportBottomGap = 8.0f;
 
 template <typename T>
 T Clamp(T v, T lo, T hi) {
@@ -173,7 +175,6 @@ private:
     void Render();
     void DrawImageRegion(const D2D1_RECT_F& viewport);
     void DrawFilmStrip(const D2D1_RECT_F& strip_rect);
-    void DrawTopBar(float width);
     void DrawTitleButtons(const TitleButtons& buttons);
     void DrawButtonGlyph(TitleButton button, const RECT& rect);
     void DrawCenteredText(const std::wstring& text, const D2D1_RECT_F& rect, IDWriteTextFormat* format);
@@ -181,8 +182,10 @@ private:
 
     D2D1_RECT_F GetImageViewport(float width, float height) const;
     D2D1_RECT_F GetFilmStripRect(float width, float height) const;
-    TitleButtons GetTitleButtons(int client_width) const;
+    D2D1_RECT_F GetImageDestinationRect(const D2D1_RECT_F& viewport) const;
+    TitleButtons GetTitleButtons(const D2D1_RECT_F& viewport) const;
     TitleButton HitTestTitleButton(POINT client_pt) const;
+    bool IsPointOverVisibleImage(POINT client_pt, const D2D1_RECT_F& viewport) const;
     int HitTestThumbnail(POINT client_pt) const;
 
     void ShowContextMenu(POINT screen_pt);
@@ -553,8 +556,8 @@ void QmiApp::CreateBrushes() {
     }
 
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xF0F0F0, 0.97f), &brush_text_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x171717, 0.58f), &brush_panel_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x101010, 0.46f), &brush_overlay_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x171717, 0.50f), &brush_panel_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x101010, 0.50f), &brush_overlay_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x49A1FF, 1.0f), &brush_accent_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xFFFFFF, 0.14f), &brush_hover_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xE81123, 0.82f), &brush_close_hover_);
@@ -906,27 +909,60 @@ void QmiApp::EnsureThumbnailLoaded(int index) {
 }
 
 D2D1_RECT_F QmiApp::GetFilmStripRect(float width, float height) const {
-    const float strip_top = std::max(static_cast<float>(kTopBarHeight + 70), height - static_cast<float>(film_strip_height_));
+    const float strip_top = std::max(kViewportMargin + 70.0f, height - static_cast<float>(film_strip_height_));
     return D2D1::RectF(0.0f, strip_top, width, height);
 }
 
 D2D1_RECT_F QmiApp::GetImageViewport(float width, float height) const {
     const D2D1_RECT_F strip = GetFilmStripRect(width, height);
-    const float top = static_cast<float>(kTopBarHeight) + 8.0f;
-    const float bottom = strip.top - 8.0f;
-    const float left = 12.0f;
-    const float right = width - 12.0f;
+    const float top = kViewportMargin;
+    const float bottom = strip.top - kViewportBottomGap;
+    const float left = kViewportMargin;
+    const float right = width - kViewportMargin;
     if (bottom <= top + 40.0f) {
         return D2D1::RectF(left, top, right, top + 40.0f);
     }
     return D2D1::RectF(left, top, right, bottom);
 }
 
-TitleButtons QmiApp::GetTitleButtons(int client_width) const {
+D2D1_RECT_F QmiApp::GetImageDestinationRect(const D2D1_RECT_F& viewport) const {
+    if (current_image_.type == ImageType::None) {
+        return D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    const float img_w = std::max(1.0f, current_image_.width);
+    const float img_h = std::max(1.0f, current_image_.height);
+
+    const float view_w = std::max(1.0f, viewport.right - viewport.left);
+    const float view_h = std::max(1.0f, viewport.bottom - viewport.top);
+    const float fit = std::min(view_w / img_w, view_h / img_h);
+    const float scale = std::max(0.02f, fit * zoom_);
+    const float dest_w = img_w * scale;
+    const float dest_h = img_h * scale;
+
+    const float cx = (viewport.left + viewport.right) * 0.5f + pan_x_;
+    const float cy = (viewport.top + viewport.bottom) * 0.5f + pan_y_;
+    return D2D1::RectF(cx - dest_w * 0.5f, cy - dest_h * 0.5f, cx + dest_w * 0.5f, cy + dest_h * 0.5f);
+}
+
+TitleButtons QmiApp::GetTitleButtons(const D2D1_RECT_F& viewport) const {
     TitleButtons b{};
-    b.close_rect = RECT{client_width - kTitleButtonWidth, 0, client_width, kTopBarHeight};
-    b.max_rect = RECT{client_width - kTitleButtonWidth * 2, 0, client_width - kTitleButtonWidth, kTopBarHeight};
-    b.min_rect = RECT{client_width - kTitleButtonWidth * 3, 0, client_width - kTitleButtonWidth * 2, kTopBarHeight};
+
+    const int top = static_cast<int>(std::lround(viewport.top + 10.0f));
+    const int right = static_cast<int>(std::lround(viewport.right - 10.0f));
+
+    b.close_rect = RECT{right - kTitleButtonWidth, top, right, top + kTitleButtonHeight};
+    b.max_rect = RECT{right - kTitleButtonWidth * 2, top, right - kTitleButtonWidth, top + kTitleButtonHeight};
+    b.min_rect = RECT{right - kTitleButtonWidth * 3, top, right - kTitleButtonWidth * 2, top + kTitleButtonHeight};
+
+    const int min_left = static_cast<int>(std::lround(viewport.left + 10.0f));
+    if (b.min_rect.left < min_left) {
+        const int shift = min_left - b.min_rect.left;
+        OffsetRect(&b.min_rect, shift, 0);
+        OffsetRect(&b.max_rect, shift, 0);
+        OffsetRect(&b.close_rect, shift, 0);
+    }
+
     return b;
 }
 
@@ -937,7 +973,8 @@ TitleButton QmiApp::HitTestTitleButton(POINT client_pt) const {
 
     RECT rc{};
     GetClientRect(hwnd_, &rc);
-    const TitleButtons buttons = GetTitleButtons(rc.right - rc.left);
+    const D2D1_RECT_F viewport = GetImageViewport(static_cast<float>(rc.right - rc.left), static_cast<float>(rc.bottom - rc.top));
+    const TitleButtons buttons = GetTitleButtons(viewport);
 
     if (PtInRect(&buttons.close_rect, client_pt)) {
         return TitleButton::Close;
@@ -949,6 +986,25 @@ TitleButton QmiApp::HitTestTitleButton(POINT client_pt) const {
         return TitleButton::Minimize;
     }
     return TitleButton::None;
+}
+
+bool QmiApp::IsPointOverVisibleImage(POINT client_pt, const D2D1_RECT_F& viewport) const {
+    if (current_image_.type == ImageType::None) {
+        return false;
+    }
+
+    const D2D1_RECT_F dest = GetImageDestinationRect(viewport);
+    const D2D1_RECT_F visible = D2D1::RectF(std::max(dest.left, viewport.left),
+                                             std::max(dest.top, viewport.top),
+                                             std::min(dest.right, viewport.right),
+                                             std::min(dest.bottom, viewport.bottom));
+    if (visible.right <= visible.left || visible.bottom <= visible.top) {
+        return false;
+    }
+
+    const float x = static_cast<float>(client_pt.x);
+    const float y = static_cast<float>(client_pt.y);
+    return x >= visible.left && x <= visible.right && y >= visible.top && y <= visible.bottom;
 }
 
 int QmiApp::HitTestThumbnail(POINT client_pt) const {
@@ -1035,24 +1091,6 @@ void QmiApp::DrawTitleButtons(const TitleButtons& buttons) {
     draw_button(TitleButton::Close, buttons.close_rect);
 }
 
-void QmiApp::DrawTopBar(float width) {
-    if (!d2d_context_ || !brush_panel_) {
-        return;
-    }
-
-    d2d_context_->FillRectangle(D2D1::RectF(0.0f, 0.0f, width, static_cast<float>(kTopBarHeight)), brush_panel_.Get());
-
-    std::wstring title = L"Qmi";
-    if (current_index_ >= 0 && current_index_ < static_cast<int>(images_.size())) {
-        title += L"  -  " + images_[current_index_].filename().wstring();
-    }
-
-    DrawCenteredText(title, D2D1::RectF(14.0f, 0.0f, width - 180.0f, static_cast<float>(kTopBarHeight)), text_format_.Get());
-
-    const TitleButtons buttons = GetTitleButtons(static_cast<int>(width));
-    DrawTitleButtons(buttons);
-}
-
 void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
     if (!d2d_context_ || !brush_image_bg_) {
         return;
@@ -1065,21 +1103,12 @@ void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
         return;
     }
 
+    const D2D1_RECT_F dest = GetImageDestinationRect(viewport);
     const float img_w = std::max(1.0f, current_image_.width);
     const float img_h = std::max(1.0f, current_image_.height);
-
-    const float view_w = std::max(1.0f, viewport.right - viewport.left);
-    const float view_h = std::max(1.0f, viewport.bottom - viewport.top);
-    const float fit = std::min(view_w / img_w, view_h / img_h);
-    const float scale = std::max(0.02f, fit * zoom_);
-
-    const float dest_w = img_w * scale;
-    const float dest_h = img_h * scale;
-
-    const float cx = (viewport.left + viewport.right) * 0.5f + pan_x_;
-    const float cy = (viewport.top + viewport.bottom) * 0.5f + pan_y_;
-
-    const D2D1_RECT_F dest = D2D1::RectF(cx - dest_w * 0.5f, cy - dest_h * 0.5f, cx + dest_w * 0.5f, cy + dest_h * 0.5f);
+    const float dest_w = std::max(1.0f, dest.right - dest.left);
+    const float dest_h = std::max(1.0f, dest.bottom - dest.top);
+    const float scale = std::min(dest_w / img_w, dest_h / img_h);
 
     d2d_context_->PushAxisAlignedClip(viewport, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
 
@@ -1178,15 +1207,17 @@ void QmiApp::Render() {
     d2d_context_->SetTransform(D2D1::Matrix3x2F::Identity());
     d2d_context_->Clear(D2D1::ColorF(0x111217, 0.33f));
 
+    DrawImageRegion(viewport);
+
     if (brush_overlay_) {
-        d2d_context_->FillRectangle(D2D1::RectF(0.0f, static_cast<float>(kTopBarHeight), viewport.left, strip.top), brush_overlay_.Get());
-        d2d_context_->FillRectangle(D2D1::RectF(viewport.right, static_cast<float>(kTopBarHeight), size.width, strip.top),
-                                    brush_overlay_.Get());
+        d2d_context_->FillRectangle(D2D1::RectF(0.0f, 0.0f, size.width, viewport.top), brush_overlay_.Get());
+        d2d_context_->FillRectangle(D2D1::RectF(0.0f, viewport.top, viewport.left, viewport.bottom), brush_overlay_.Get());
+        d2d_context_->FillRectangle(D2D1::RectF(viewport.right, viewport.top, size.width, viewport.bottom), brush_overlay_.Get());
+        d2d_context_->FillRectangle(D2D1::RectF(0.0f, viewport.bottom, size.width, strip.top), brush_overlay_.Get());
     }
 
-    DrawImageRegion(viewport);
     DrawFilmStrip(strip);
-    DrawTopBar(size.width);
+    DrawTitleButtons(GetTitleButtons(viewport));
 
     if (!current_error_.empty()) {
         DrawMessageOverlay(current_error_);
@@ -1371,10 +1402,6 @@ LRESULT QmiApp::HitTestNonClient(POINT screen_pt) const {
         return HTCLIENT;
     }
 
-    if (client_pt.y >= 0 && client_pt.y < kTopBarHeight) {
-        return HTCAPTION;
-    }
-
     return HTCLIENT;
 }
 
@@ -1470,8 +1497,7 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             if (d2d_context_) {
                 const D2D1_SIZE_F size = d2d_context_->GetSize();
                 const D2D1_RECT_F viewport = GetImageViewport(size.width, size.height);
-                if (current_image_.type != ImageType::None && pt.x >= viewport.left && pt.x <= viewport.right && pt.y >= viewport.top &&
-                    pt.y <= viewport.bottom) {
+                if (IsPointOverVisibleImage(pt, viewport)) {
                     dragging_image_ = true;
                     drag_last_ = pt;
                     SetCapture(hwnd_);
@@ -1516,10 +1542,6 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
         }
 
         case WM_LBUTTONDBLCLK: {
-            POINT pt = POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-            if (pt.y >= 0 && pt.y < kTopBarHeight && HitTestTitleButton(pt) == TitleButton::None) {
-                ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
-            }
             return 0;
         }
 
