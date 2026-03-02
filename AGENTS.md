@@ -20,6 +20,7 @@
 - No top title bar is drawn.
 - Minimize / maximize / close buttons are custom-drawn in the top-right of the image viewport.
 - Areas outside the image viewport are rendered as 50% translucent overlays/panels.
+- Main window translucency is enforced by `WS_EX_LAYERED` + `SetLayeredWindowAttributes` (constant alpha).
 - Image drag/pan starts only when left click is on the currently visible image content (not just anywhere in viewport).
 - Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
 - Mouse wheel zoom is cursor-anchored and active only inside image viewport.
@@ -79,6 +80,7 @@ Build output executable:
   - `GetTitleButtons`
 - Rendering:
   - `Render`
+  - `CreateWindowSizeResources` (swapchain setup)
   - `DrawImageRegion`
   - `DrawFilmStrip`
   - `DrawTitleButtons`

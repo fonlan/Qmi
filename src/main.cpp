@@ -46,6 +46,9 @@
 #ifndef DWMSBT_TRANSIENTWINDOW
 #define DWMSBT_TRANSIENTWINDOW 3
 #endif
+#ifndef DWMSBT_NONE
+#define DWMSBT_NONE 1
+#endif
 
 namespace fs = std::filesystem;
 using Microsoft::WRL::ComPtr;
@@ -68,6 +71,7 @@ constexpr int kTitleButtonWidth = 46;
 constexpr int kTitleButtonHeight = 34;
 constexpr float kViewportMargin = 12.0f;
 constexpr float kViewportBottomGap = 8.0f;
+constexpr BYTE kWindowOpacityAlpha = 230;
 
 template <typename T>
 T Clamp(T v, T lo, T hi) {
@@ -366,7 +370,7 @@ bool QmiApp::RegisterWindowClasses() {
 
 bool QmiApp::CreateMainWindow(int show_cmd) {
     const DWORD style = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
-    const DWORD ex_style = WS_EX_APPWINDOW;
+    const DWORD ex_style = WS_EX_APPWINDOW | WS_EX_LAYERED;
     hwnd_ = CreateWindowExW(ex_style,
                             kMainClassName,
                             L"Qmi",
@@ -383,6 +387,7 @@ bool QmiApp::CreateMainWindow(int show_cmd) {
         return false;
     }
 
+    SetLayeredWindowAttributes(hwnd_, 0, kWindowOpacityAlpha, LWA_ALPHA);
     DragAcceptFiles(hwnd_, TRUE);
     ShowWindow(hwnd_, show_cmd);
     UpdateWindow(hwnd_);
@@ -394,15 +399,18 @@ void QmiApp::ApplyWindowBackdrop() {
         return;
     }
 
+    const MARGINS glass = {-1, -1, -1, -1};
+    DwmExtendFrameIntoClientArea(hwnd_, &glass);
+
     BOOL dark = TRUE;
     DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
-    int backdrop_type = DWMSBT_TRANSIENTWINDOW;
+    int backdrop_type = DWMSBT_NONE;
     DwmSetWindowAttribute(hwnd_, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop_type, sizeof(backdrop_type));
 
     DWM_BLURBEHIND blur_behind{};
     blur_behind.dwFlags = DWM_BB_ENABLE;
-    blur_behind.fEnable = TRUE;
+    blur_behind.fEnable = FALSE;
     DwmEnableBlurBehindWindow(hwnd_, &blur_behind);
 }
 
@@ -509,13 +517,12 @@ bool QmiApp::CreateWindowSizeResources() {
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         desc.Scaling = DXGI_SCALING_STRETCH;
         desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-
         if (FAILED(factory->CreateSwapChainForHwnd(
                 d3d_device_.Get(), hwnd_, &desc, nullptr, nullptr, &swap_chain_))) {
             return false;
         }
-
         factory->MakeWindowAssociation(hwnd_, DXGI_MWA_NO_ALT_ENTER);
+        SetLayeredWindowAttributes(hwnd_, 0, kWindowOpacityAlpha, LWA_ALPHA);
     } else {
         HRESULT hr = swap_chain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
         if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
@@ -525,6 +532,7 @@ bool QmiApp::CreateWindowSizeResources() {
         if (FAILED(hr)) {
             return false;
         }
+        SetLayeredWindowAttributes(hwnd_, 0, kWindowOpacityAlpha, LWA_ALPHA);
     }
 
     ComPtr<IDXGISurface> back_buffer;
@@ -1205,7 +1213,7 @@ void QmiApp::Render() {
 
     d2d_context_->BeginDraw();
     d2d_context_->SetTransform(D2D1::Matrix3x2F::Identity());
-    d2d_context_->Clear(D2D1::ColorF(0x111217, 0.33f));
+    d2d_context_->Clear(D2D1::ColorF(0x000000, 0.0f));
 
     DrawImageRegion(viewport);
 
