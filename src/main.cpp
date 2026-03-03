@@ -3181,6 +3181,8 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
     }
     int remaining_decode_budget = kThumbnailDecodeBudgetPerFrame;
     bool has_pending_visible_thumbnail = false;
+    bool has_hovered_visible_thumb = false;
+    D2D1_RECT_F hovered_thumb_rect = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
 
     if (current_index_ >= start && current_index_ < end && current_index_ < static_cast<int>(thumbnails_.size()) &&
         !thumbnails_[current_index_].attempted && remaining_decode_budget > 0) {
@@ -3196,6 +3198,10 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
         const float item_top = std::max(strip_rect.top + padding_y, baseline - item_h);
         D2D1_RECT_F cell = D2D1::RectF(x, item_top, x + item_w, baseline);
         visible_thumbs_.push_back(VisibleThumb{i, cell});
+        if (i == hover_thumbnail_index_) {
+            has_hovered_visible_thumb = true;
+            hovered_thumb_rect = cell;
+        }
 
         if (i != current_index_ && i < static_cast<int>(thumbnails_.size()) && !thumbnails_[i].attempted) {
             if (remaining_decode_budget > 0) {
@@ -3228,6 +3234,32 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
         d2d_context_->DrawRectangle(cell, stroke_brush, stroke);
 
         x += item_w + gap;
+    }
+
+    if (has_hovered_visible_thumb && hover_thumbnail_index_ >= 0 && hover_thumbnail_index_ < image_count && brush_text_ &&
+        small_text_format_) {
+        const std::wstring hover_name = images_[hover_thumbnail_index_].filename().wstring();
+        if (!hover_name.empty()) {
+            const float text_h = 22.0f;
+            const float text_margin = 6.0f;
+            const float text_gap = 4.0f;
+            float text_w = std::min(std::max(120.0f, (hovered_thumb_rect.right - hovered_thumb_rect.left) * 1.8f),
+                                    strip_width - text_margin * 2.0f);
+            text_w = std::max(60.0f, text_w);
+            const float center_x = (hovered_thumb_rect.left + hovered_thumb_rect.right) * 0.5f;
+            const float min_left = strip_rect.left + text_margin;
+            const float max_left = std::max(min_left, strip_rect.right - text_margin - text_w);
+            const float text_left = Clamp(center_x - text_w * 0.5f, min_left, max_left);
+            const float text_bottom = hovered_thumb_rect.top - text_gap;
+            const float text_top = std::max(2.0f, text_bottom - text_h);
+            const D2D1_RECT_F text_rect = D2D1::RectF(text_left, text_top, text_left + text_w, text_bottom);
+            d2d_context_->DrawTextW(hover_name.c_str(),
+                                    static_cast<UINT32>(hover_name.size()),
+                                    small_text_format_.Get(),
+                                    text_rect,
+                                    brush_text_.Get(),
+                                    D2D1_DRAW_TEXT_OPTIONS_CLIP);
+        }
     }
 
     if (has_pending_visible_thumbnail || has_pending_scale_animation) {
