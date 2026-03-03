@@ -95,8 +95,12 @@ constexpr int kCtrlAssociationSelectAll = 2201;
 constexpr int kCtrlAssociationClearAll = 2202;
 constexpr int kCtrlAssociationCheckboxBase = 2300;
 constexpr int kCtrlShortcutsTable = 2400;
+constexpr int kCtrlAboutRepoLink = 2500;
 constexpr int kSettingsWindowWidth = 700;
 constexpr int kSettingsWindowHeight = 460;
+
+constexpr wchar_t kQmiAuthorName[] = L"fonlan";
+constexpr wchar_t kQmiRepositoryUrl[] = L"https://github.com/fonlan/Qmi";
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -765,10 +769,17 @@ struct SettingsWindowState {
     HWND association_status = nullptr;
 
     HWND shortcuts_table = nullptr;
-    HWND about_text = nullptr;
+    HWND about_icon = nullptr;
+    HWND about_title = nullptr;
+    HWND about_description = nullptr;
+    HWND about_author = nullptr;
+    HWND about_repo_label = nullptr;
+    HWND about_repo_link = nullptr;
 
     HFONT nav_font = nullptr;
     HFONT body_font = nullptr;
+    HFONT about_title_font = nullptr;
+    HFONT about_link_font = nullptr;
 };
 
 void SetControlFont(HWND hwnd, HFONT font) {
@@ -854,7 +865,12 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
     }
 
     ShowWindow(state->shortcuts_table, show_shortcuts ? SW_SHOW : SW_HIDE);
-    ShowWindow(state->about_text, show_about ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->about_icon, show_about ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->about_title, show_about ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->about_description, show_about ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->about_author, show_about ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->about_repo_label, show_about ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->about_repo_link, show_about ? SW_SHOW : SW_HIDE);
     if (state->nav_list) {
         InvalidateRect(state->nav_list, nullptr, FALSE);
     }
@@ -927,7 +943,31 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
                std::max(34, panel_height - (button_y - panel_y) - 42),
                TRUE);
 
-    MoveWindow(state->about_text, panel_x + kPanelPaddingX, panel_y + 8, text_width, std::max(40, panel_height - 16), TRUE);
+    const int about_x = panel_x + kPanelPaddingX;
+    const int about_y = panel_y + 16;
+    constexpr int kAboutIconSize = 64;
+    constexpr int kAboutIconTitleGap = 14;
+    const int about_title_x = about_x + kAboutIconSize + kAboutIconTitleGap;
+    const int about_title_width = std::max(80, text_width - kAboutIconSize - kAboutIconTitleGap);
+
+    MoveWindow(state->about_icon, about_x, about_y, kAboutIconSize, kAboutIconSize, TRUE);
+    MoveWindow(state->about_title, about_title_x, about_y + 6, about_title_width, 30, TRUE);
+
+    const int about_desc_y = about_y + kAboutIconSize + 16;
+    MoveWindow(state->about_description, about_x, about_desc_y, text_width, 48, TRUE);
+
+    const int about_author_y = about_desc_y + 58;
+    MoveWindow(state->about_author, about_x, about_author_y, text_width, 26, TRUE);
+
+    const int about_repo_y = about_author_y + 34;
+    constexpr int kAboutRepoLabelWidth = 84;
+    MoveWindow(state->about_repo_label, about_x, about_repo_y, kAboutRepoLabelWidth, 26, TRUE);
+    MoveWindow(state->about_repo_link,
+               about_x + kAboutRepoLabelWidth,
+               about_repo_y,
+               std::max(60, text_width - kAboutRepoLabelWidth),
+               26,
+               TRUE);
     MoveWindow(
         state->shortcuts_table, panel_x + kPanelPaddingX, panel_y + 8, text_width, std::max(40, panel_height - 16), TRUE);
     ResizeShortcutsTableColumns(state->shortcuts_table, text_width);
@@ -4696,6 +4736,12 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             state->body_font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                            OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
                                            L"Segoe UI");
+            state->about_title_font = CreateFontW(-28, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                                  DEFAULT_PITCH, L"Segoe UI");
+            state->about_link_font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, TRUE, FALSE, DEFAULT_CHARSET,
+                                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                                 DEFAULT_PITCH, L"Segoe UI");
 
             state->nav_list = CreateWindowExW(0,
                                               L"LISTBOX",
@@ -4848,18 +4894,68 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                         nullptr);
             SyncAssociationSelections(state);
 
-            state->about_text = CreateWindowExW(0,
-                                                L"STATIC",
-                                                L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / ico / webp / gif / heic / heif / svg",
-                                                WS_CHILD | WS_VISIBLE,
-                                                0,
-                                                0,
-                                                0,
-                                                0,
-                                                hwnd,
-                                                nullptr,
-                                                nullptr,
-                                                nullptr);
+            state->about_icon = CreateWindowExW(
+                0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE | SS_ICON | SS_CENTERIMAGE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
+            state->about_title =
+                CreateWindowExW(0, L"STATIC", L"Qmi", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
+            state->about_description = CreateWindowExW(
+                0,
+                L"STATIC",
+                L"\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\uff0c\u652f\u6301 jpg / jpeg / png / bmp / ico / webp / gif / heic / heif / svg",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                nullptr,
+                nullptr,
+                nullptr);
+            state->about_author = CreateWindowExW(0,
+                                                  L"STATIC",
+                                                  (std::wstring(L"\u4f5c\u8005\uff1a") + kQmiAuthorName).c_str(),
+                                                  WS_CHILD | WS_VISIBLE,
+                                                  0,
+                                                  0,
+                                                  0,
+                                                  0,
+                                                  hwnd,
+                                                  nullptr,
+                                                  nullptr,
+                                                  nullptr);
+            state->about_repo_label = CreateWindowExW(0,
+                                                      L"STATIC",
+                                                      L"\u4ed3\u5e93\uff1a",
+                                                      WS_CHILD | WS_VISIBLE,
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      hwnd,
+                                                      nullptr,
+                                                      nullptr,
+                                                      nullptr);
+            state->about_repo_link = CreateWindowExW(0,
+                                                     L"STATIC",
+                                                     kQmiRepositoryUrl,
+                                                     WS_CHILD | WS_VISIBLE | SS_NOTIFY,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     hwnd,
+                                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlAboutRepoLink)),
+                                                     nullptr,
+                                                     nullptr);
+            if (state->about_icon) {
+                HICON about_icon = LoadAppIcon(app ? app->hinstance_ : nullptr, 64, 64);
+                if (!about_icon) {
+                    about_icon = LoadIconW(nullptr, IDI_APPLICATION);
+                }
+                if (about_icon) {
+                    SendMessageW(state->about_icon, STM_SETICON, reinterpret_cast<WPARAM>(about_icon), 0);
+                }
+            }
             state->shortcuts_table = CreateWindowExW(0,
                                                      WC_LISTVIEWW,
                                                      nullptr,
@@ -4887,7 +4983,12 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             SetControlFont(state->association_apply_button, state->body_font);
             SetControlFont(state->association_status, state->body_font);
             SetControlFont(state->shortcuts_table, state->body_font);
-            SetControlFont(state->about_text, state->body_font);
+            SetControlFont(state->about_icon, state->body_font);
+            SetControlFont(state->about_title, state->about_title_font ? state->about_title_font : state->body_font);
+            SetControlFont(state->about_description, state->body_font);
+            SetControlFont(state->about_author, state->body_font);
+            SetControlFont(state->about_repo_label, state->body_font);
+            SetControlFont(state->about_repo_link, state->about_link_font ? state->about_link_font : state->body_font);
 
             SetActiveSettingsPage(state, static_cast<int>(SettingsPage::General));
             LayoutSettingsWindow(hwnd, state);
@@ -4952,6 +5053,17 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
                 return 0;
             }
+            if (HIWORD(wparam) == STN_CLICKED && LOWORD(wparam) == kCtrlAboutRepoLink) {
+                const HINSTANCE shell_result =
+                    ShellExecuteW(hwnd, L"open", kQmiRepositoryUrl, nullptr, nullptr, SW_SHOWNORMAL);
+                if (reinterpret_cast<INT_PTR>(shell_result) <= 32) {
+                    MessageBoxW(hwnd,
+                                L"\u65e0\u6cd5\u6253\u5f00\u4ed3\u5e93\u5730\u5740\u3002",
+                                L"Qmi",
+                                MB_ICONWARNING | MB_OK);
+                }
+                return 0;
+            }
             if (HIWORD(wparam) == BN_CLICKED) {
                 const int control_id = LOWORD(wparam);
                 if (control_id == kCtrlAssociationSelectAll) {
@@ -4988,6 +5100,12 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 InvalidateRect(app->hwnd_, nullptr, FALSE);
             }
             return 0;
+        case WM_SETCURSOR:
+            if (state && state->about_repo_link && reinterpret_cast<HWND>(wparam) == state->about_repo_link) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            break;
         case WM_CTLCOLORLISTBOX:
             if (state && reinterpret_cast<HWND>(lparam) == state->nav_list) {
                 SetTextColor(reinterpret_cast<HDC>(wparam), RGB(43, 48, 59));
@@ -5012,9 +5130,21 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     }
                 }
 
+                if (ctrl == state->about_repo_link) {
+                    SetTextColor(hdc, RGB(36, 92, 196));
+                    SetBkMode(hdc, TRANSPARENT);
+                    return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
+                }
+                if (ctrl == state->about_title) {
+                    SetTextColor(hdc, RGB(25, 33, 52));
+                    SetBkMode(hdc, TRANSPARENT);
+                    return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
+                }
+
                 const bool is_panel_ctrl = ctrl == state->fit_checkbox || ctrl == state->smooth_checkbox ||
                                            ctrl == state->associations_hint || ctrl == state->association_status ||
-                                           ctrl == state->about_text || is_association_checkbox;
+                                           ctrl == state->about_description || ctrl == state->about_author ||
+                                           ctrl == state->about_repo_label || is_association_checkbox;
                 if (is_panel_ctrl) {
                     SetTextColor(hdc, RGB(52, 58, 70));
                     SetBkMode(hdc, TRANSPARENT);
@@ -5041,6 +5171,12 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
                 if (state->body_font) {
                     DeleteObject(state->body_font);
+                }
+                if (state->about_title_font) {
+                    DeleteObject(state->about_title_font);
+                }
+                if (state->about_link_font) {
+                    DeleteObject(state->about_link_font);
                 }
                 delete state;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
