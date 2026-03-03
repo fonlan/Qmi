@@ -6,7 +6,7 @@
 - Language: C++20
 - UI/Windowing: Win32 API (custom chrome, borderless main window)
 - Rendering: Direct3D 11 + Direct2D 1.3/1.5
-- Imaging: WIC for `.jpg/.jpeg/.png/.bmp`, built-in `libwebp` for `.webp`, Direct2D SVG document for `.svg`
+- Imaging: WIC for `.jpg/.jpeg/.png/.bmp/.gif` (GIF uses frame composition + timer playback), built-in `libwebp` for `.webp`, Direct2D SVG document for `.svg`
 - Build system: CMake (Visual Studio 2022 generator)
 
 ## Repository Layout
@@ -27,6 +27,7 @@
 - Image drag/pan starts only when left click is on the currently visible image content (not just anywhere in viewport).
 - Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
 - Mouse wheel behavior is region-aware: cursor-anchored zoom in the image viewport, horizontal filmstrip scrolling when hovering the bottom filmstrip.
+- GIF files play as animated images in the main viewport (timer-driven frame switching); filmstrip thumbnails use the first frame.
 - On open/switch/reset view, large images are scaled down to fully fit the viewport; images smaller than the viewport are shown at 100% (no automatic upscaling).
 - Dragging/zooming repaint requests are throttled to ~60 FPS (16 ms minimum interval); idle state does not run a continuous render loop.
 - Bottom filmstrip shows sibling images in current directory; click thumbnail to switch.
@@ -53,8 +54,9 @@
 
 ## Format Support
 
-- Supported extensions: `.jpg`, `.jpeg`, `.png`, `.bmp`, `.webp`, `.svg`.
+- Supported extensions: `.jpg`, `.jpeg`, `.png`, `.bmp`, `.webp`, `.gif`, `.svg`.
 - WebP decoding is built in via `libwebp` (does not require installing a system WIC WebP codec).
+- GIF animated playback is built in via WIC decoder frame composition + `WM_TIMER`.
 
 ## Startup Behavior
 
@@ -90,6 +92,7 @@ Build output executable:
 - Window creation/backdrop: `CreateMainWindow`, `ApplyWindowBackdrop`
 - Image loading:
   - Raster: `LoadRasterBitmap`
+  - GIF animation decode/composition: `LoadGifAnimation`
   - WebP built-in decode: `LoadWebpBitmap`
   - SVG: `LoadSvgDocument`
   - File switch/open: `LoadImageByIndex`, `OpenImagePath`
@@ -111,13 +114,14 @@ Build output executable:
 - Input:
   - Zoom: `HandleMouseWheel`
   - Repaint throttling: `RequestRender` + `WM_TIMER(kRenderTimerId)`
+  - GIF playback tick: `WM_TIMER(kAnimationTimerId)` + `ScheduleNextAnimationFrame`
   - Open button hit-test: `HitTestOpenButton`
   - Drag hit-test: `IsPointOverVisibleImage`
   - Window/event dispatch: `HandleMessage`
 
 ## Known Limitations
 
-- No major known limitations currently tracked.
+- GIF animation currently pre-decodes all frames into in-memory bitmaps; very large/long GIFs can consume noticeable memory.
 
 ## Documentation Sync Rules
 - Every time you implement a new function or adjust a function, you need to check whether there are relevant instructions in `AGENTS.md`. If not, you need to add them.

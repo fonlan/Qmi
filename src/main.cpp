@@ -26,6 +26,7 @@
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -68,6 +69,7 @@ constexpr UINT kMenuSettings = 1002;
 constexpr UINT kMenuExit = 1003;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
+constexpr UINT_PTR kAnimationTimerId = 3;
 
 constexpr int kCtrlFitOnSwitch = 2001;
 constexpr int kCtrlSmoothSampling = 2002;
@@ -81,6 +83,8 @@ constexpr int kTitleButtonHeight = 34;
 constexpr float kViewportMargin = 0.0f;
 constexpr float kViewportBottomGap = 0.0f;
 constexpr ULONGLONG kInteractiveFrameIntervalMs = 16;
+constexpr UINT kGifDefaultDelayMs = 100;
+constexpr UINT kGifMinDelayMs = 16;
 constexpr int kThumbnailDecodeBudgetPerFrame = 1;
 constexpr BYTE kUiChromeAlpha = 200;
 constexpr float kUiChromeOpacity = static_cast<float>(kUiChromeAlpha) / 255.0f;
@@ -111,11 +115,137 @@ std::wstring NormalizePathLower(const fs::path& p) {
 bool IsSupportedExtension(const fs::path& p) {
     const std::wstring ext = ToLower(p.extension().wstring());
     return ext == L".jpg" || ext == L".jpeg" || ext == L".png" || ext == L".bmp" || ext == L".webp" ||
-           ext == L".svg";
+           ext == L".gif" || ext == L".svg";
 }
 
 bool IsWebpExtension(const fs::path& p) {
     return ToLower(p.extension().wstring()) == L".webp";
+}
+
+bool IsGifExtension(const fs::path& p) {
+    return ToLower(p.extension().wstring()) == L".gif";
+}
+
+bool TryReadMetadataUInt(IWICMetadataQueryReader* reader, const wchar_t* query, UINT* out_value) {
+    if (!reader || !query || !out_value) {
+        return false;
+    }
+
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    const HRESULT hr = reader->GetMetadataByName(query, &value);
+    if (FAILED(hr)) {
+        PropVariantClear(&value);
+        return false;
+    }
+
+    bool ok = true;
+    switch (value.vt) {
+        case VT_UI1:
+            *out_value = value.bVal;
+            break;
+        case VT_UI2:
+            *out_value = value.uiVal;
+            break;
+        case VT_UI4:
+            *out_value = value.ulVal;
+            break;
+        case VT_I1:
+            *out_value = value.cVal < 0 ? 0u : static_cast<UINT>(value.cVal);
+            break;
+        case VT_I2:
+            *out_value = value.iVal < 0 ? 0u : static_cast<UINT>(value.iVal);
+            break;
+        case VT_I4:
+            *out_value = value.lVal < 0 ? 0u : static_cast<UINT>(value.lVal);
+            break;
+        default:
+            ok = false;
+            break;
+    }
+
+    PropVariantClear(&value);
+    return ok;
+}
+
+void ClearCanvasRect(std::vector<std::uint8_t>& canvas,
+                     UINT canvas_width,
+                     UINT canvas_height,
+                     UINT left,
+                     UINT top,
+                     UINT width,
+                     UINT height) {
+    if (canvas.empty() || canvas_width == 0 || canvas_height == 0 || width == 0 || height == 0) {
+        return;
+    }
+
+    const UINT x0 = std::min(left, canvas_width);
+    const UINT y0 = std::min(top, canvas_height);
+    const UINT x1 = std::min(canvas_width, x0 + width);
+    const UINT y1 = std::min(canvas_height, y0 + height);
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    const size_t stride = static_cast<size_t>(canvas_width) * 4u;
+    const size_t clear_width_bytes = static_cast<size_t>(x1 - x0) * 4u;
+    for (UINT y = y0; y < y1; ++y) {
+        auto* row = canvas.data() + static_cast<size_t>(y) * stride + static_cast<size_t>(x0) * 4u;
+        memset(row, 0, clear_width_bytes);
+    }
+}
+
+inline void BlendPremultipliedPixel(std::uint8_t* dst, const std::uint8_t* src) {
+    const UINT src_a = src[3];
+    if (src_a == 0) {
+        return;
+    }
+    if (src_a == 255) {
+        dst[0] = src[0];
+        dst[1] = src[1];
+        dst[2] = src[2];
+        dst[3] = 255;
+        return;
+    }
+
+    const UINT inv_src_a = 255u - src_a;
+    dst[0] = static_cast<std::uint8_t>(src[0] + ((static_cast<UINT>(dst[0]) * inv_src_a + 127u) / 255u));
+    dst[1] = static_cast<std::uint8_t>(src[1] + ((static_cast<UINT>(dst[1]) * inv_src_a + 127u) / 255u));
+    dst[2] = static_cast<std::uint8_t>(src[2] + ((static_cast<UINT>(dst[2]) * inv_src_a + 127u) / 255u));
+    dst[3] = static_cast<std::uint8_t>(src_a + ((static_cast<UINT>(dst[3]) * inv_src_a + 127u) / 255u));
+}
+
+void CompositeFrame(std::vector<std::uint8_t>& canvas,
+                    UINT canvas_width,
+                    UINT canvas_height,
+                    const std::vector<std::uint8_t>& frame,
+                    UINT frame_width,
+                    UINT frame_height,
+                    UINT offset_x,
+                    UINT offset_y) {
+    if (canvas.empty() || frame.empty() || canvas_width == 0 || canvas_height == 0 || frame_width == 0 || frame_height == 0) {
+        return;
+    }
+
+    const UINT x0 = std::min(offset_x, canvas_width);
+    const UINT y0 = std::min(offset_y, canvas_height);
+    const UINT draw_w = std::min(frame_width, canvas_width - x0);
+    const UINT draw_h = std::min(frame_height, canvas_height - y0);
+    if (draw_w == 0 || draw_h == 0) {
+        return;
+    }
+
+    const size_t canvas_stride = static_cast<size_t>(canvas_width) * 4u;
+    const size_t frame_stride = static_cast<size_t>(frame_width) * 4u;
+
+    for (UINT y = 0; y < draw_h; ++y) {
+        std::uint8_t* dst_row =
+            canvas.data() + static_cast<size_t>(y0 + y) * canvas_stride + static_cast<size_t>(x0) * 4u;
+        const std::uint8_t* src_row = frame.data() + static_cast<size_t>(y) * frame_stride;
+        for (UINT x = 0; x < draw_w; ++x) {
+            BlendPremultipliedPixel(dst_row + static_cast<size_t>(x) * 4u, src_row + static_cast<size_t>(x) * 4u);
+        }
+    }
 }
 
 std::optional<fs::path> FindFirstSupportedImageInDirectory(const fs::path& directory) {
@@ -318,6 +448,7 @@ private:
                            ID2D1Bitmap1** out_bitmap,
                            float* out_width,
                            float* out_height);
+    HRESULT LoadGifAnimation(const fs::path& path, LoadedImage* out_image);
     HRESULT LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg, float* out_width, float* out_height);
     HRESULT LoadSvgThumbnailBitmap(const fs::path& path,
                                    UINT max_width,
@@ -326,6 +457,8 @@ private:
                                    float* out_width,
                                    float* out_height);
     void EnsureThumbnailLoaded(int index);
+    void ClearAnimationState();
+    void ScheduleNextAnimationFrame();
 
     void Render();
     void DrawImageRegion(const D2D1_RECT_F& viewport);
@@ -420,6 +553,9 @@ private:
     bool deferred_directory_build_pending_ = false;
     std::wstring deferred_directory_target_norm_;
     bool bitmaps_need_reload_ = false;
+    std::vector<ComPtr<ID2D1Bitmap1>> animation_frames_;
+    std::vector<UINT> animation_frame_delays_ms_;
+    size_t animation_frame_index_ = 0;
 
     HDC layered_dc_ = nullptr;
     HBITMAP layered_bitmap_ = nullptr;
@@ -781,6 +917,8 @@ void QmiApp::CreateBrushes() {
 }
 
 void QmiApp::DiscardDeviceResources() {
+    ClearAnimationState();
+
     target_bitmap_.Reset();
     frame_texture_.Reset();
     readback_texture_.Reset();
@@ -810,6 +948,23 @@ void QmiApp::ResetView() {
     zoom_ = 1.0f;
     pan_x_ = 0.0f;
     pan_y_ = 0.0f;
+}
+
+void QmiApp::ClearAnimationState() {
+    if (hwnd_) {
+        KillTimer(hwnd_, kAnimationTimerId);
+    }
+    animation_frames_.clear();
+    animation_frame_delays_ms_.clear();
+    animation_frame_index_ = 0;
+}
+
+void QmiApp::ScheduleNextAnimationFrame() {
+    if (!hwnd_ || animation_frames_.size() <= 1 || animation_frame_delays_ms_.size() != animation_frames_.size()) {
+        return;
+    }
+    const UINT delay = std::max<UINT>(1u, animation_frame_delays_ms_[animation_frame_index_]);
+    SetTimer(hwnd_, kAnimationTimerId, delay, nullptr);
 }
 
 void QmiApp::BuildDirectoryList(const fs::path& selected_file) {
@@ -1131,6 +1286,203 @@ HRESULT QmiApp::LoadRasterBitmap(const fs::path& path,
     return S_OK;
 }
 
+HRESULT QmiApp::LoadGifAnimation(const fs::path& path, LoadedImage* out_image) {
+    if (!out_image || !d2d_context_ || !wic_factory_) {
+        return E_POINTER;
+    }
+
+    animation_frames_.clear();
+    animation_frame_delays_ms_.clear();
+    animation_frame_index_ = 0;
+
+    ComPtr<IWICBitmapDecoder> decoder;
+    HRESULT hr = wic_factory_->CreateDecoderFromFilename(
+        path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
+    if (FAILED(hr) || !decoder) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    UINT frame_count = 0;
+    hr = decoder->GetFrameCount(&frame_count);
+    if (FAILED(hr) || frame_count == 0) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    UINT canvas_width = 0;
+    UINT canvas_height = 0;
+    ComPtr<IWICMetadataQueryReader> decoder_reader;
+    if (SUCCEEDED(decoder->GetMetadataQueryReader(&decoder_reader)) && decoder_reader) {
+        TryReadMetadataUInt(decoder_reader.Get(), L"/logscrdesc/Width", &canvas_width);
+        TryReadMetadataUInt(decoder_reader.Get(), L"/logscrdesc/Height", &canvas_height);
+    }
+
+    if (canvas_width == 0 || canvas_height == 0) {
+        ComPtr<IWICBitmapFrameDecode> first_frame;
+        hr = decoder->GetFrame(0, &first_frame);
+        if (FAILED(hr) || !first_frame) {
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+        hr = first_frame->GetSize(&canvas_width, &canvas_height);
+        if (FAILED(hr) || canvas_width == 0 || canvas_height == 0) {
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+    }
+
+    const size_t canvas_stride = static_cast<size_t>(canvas_width) * 4u;
+    if (canvas_width != 0 && canvas_stride / 4u != canvas_width) {
+        return E_FAIL;
+    }
+    if (canvas_height != 0 && canvas_stride > std::numeric_limits<size_t>::max() / static_cast<size_t>(canvas_height)) {
+        return E_FAIL;
+    }
+    const size_t canvas_size = canvas_stride * static_cast<size_t>(canvas_height);
+    if (canvas_stride > std::numeric_limits<UINT32>::max() || canvas_size == 0) {
+        return E_FAIL;
+    }
+
+    std::vector<std::uint8_t> canvas(canvas_size, 0);
+    std::vector<std::uint8_t> restore_canvas;
+    bool has_restore_canvas = false;
+
+    UINT prev_disposal = 0;
+    UINT prev_left = 0;
+    UINT prev_top = 0;
+    UINT prev_width = 0;
+    UINT prev_height = 0;
+
+    D2D1_BITMAP_PROPERTIES1 bitmap_props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+
+    animation_frames_.reserve(frame_count);
+    animation_frame_delays_ms_.reserve(frame_count);
+
+    for (UINT i = 0; i < frame_count; ++i) {
+        if (i > 0) {
+            if (prev_disposal == 2) {
+                ClearCanvasRect(canvas, canvas_width, canvas_height, prev_left, prev_top, prev_width, prev_height);
+            } else if (prev_disposal == 3 && has_restore_canvas && restore_canvas.size() == canvas.size()) {
+                canvas = restore_canvas;
+            }
+        }
+
+        ComPtr<IWICBitmapFrameDecode> frame;
+        hr = decoder->GetFrame(i, &frame);
+        if (FAILED(hr) || !frame) {
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+
+        UINT decode_width = 0;
+        UINT decode_height = 0;
+        hr = frame->GetSize(&decode_width, &decode_height);
+        if (FAILED(hr) || decode_width == 0 || decode_height == 0) {
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+
+        UINT frame_left = 0;
+        UINT frame_top = 0;
+        UINT frame_rect_width = decode_width;
+        UINT frame_rect_height = decode_height;
+        UINT frame_disposal = 0;
+        UINT frame_delay_cs = 0;
+
+        ComPtr<IWICMetadataQueryReader> frame_reader;
+        if (SUCCEEDED(frame->GetMetadataQueryReader(&frame_reader)) && frame_reader) {
+            TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Left", &frame_left);
+            TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Top", &frame_top);
+            UINT metadata_width = 0;
+            UINT metadata_height = 0;
+            if (TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Width", &metadata_width) && metadata_width > 0) {
+                frame_rect_width = metadata_width;
+            }
+            if (TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Height", &metadata_height) && metadata_height > 0) {
+                frame_rect_height = metadata_height;
+            }
+            TryReadMetadataUInt(frame_reader.Get(), L"/grctlext/Disposal", &frame_disposal);
+            TryReadMetadataUInt(frame_reader.Get(), L"/grctlext/Delay", &frame_delay_cs);
+        }
+
+        const bool needs_restore = frame_disposal == 3;
+        if (needs_restore) {
+            restore_canvas = canvas;
+            has_restore_canvas = true;
+        } else {
+            has_restore_canvas = false;
+        }
+
+        ComPtr<IWICFormatConverter> converter;
+        hr = wic_factory_->CreateFormatConverter(&converter);
+        if (FAILED(hr) || !converter) {
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+        hr = converter->Initialize(frame.Get(),
+                                   GUID_WICPixelFormat32bppPBGRA,
+                                   WICBitmapDitherTypeNone,
+                                   nullptr,
+                                   0.0f,
+                                   WICBitmapPaletteTypeMedianCut);
+        if (FAILED(hr)) {
+            return hr;
+        }
+
+        const size_t frame_stride = static_cast<size_t>(decode_width) * 4u;
+        if (decode_width != 0 && frame_stride / 4u != decode_width) {
+            return E_FAIL;
+        }
+        if (decode_height != 0 && frame_stride > std::numeric_limits<size_t>::max() / static_cast<size_t>(decode_height)) {
+            return E_FAIL;
+        }
+        const size_t frame_size = frame_stride * static_cast<size_t>(decode_height);
+        if (frame_stride > std::numeric_limits<UINT>::max() || frame_size > std::numeric_limits<UINT>::max() || frame_size == 0) {
+            return E_FAIL;
+        }
+
+        std::vector<std::uint8_t> frame_pixels(frame_size, 0);
+        hr = converter->CopyPixels(
+            nullptr, static_cast<UINT>(frame_stride), static_cast<UINT>(frame_size), frame_pixels.data());
+        if (FAILED(hr)) {
+            return hr;
+        }
+
+        CompositeFrame(canvas, canvas_width, canvas_height, frame_pixels, decode_width, decode_height, frame_left, frame_top);
+
+        ComPtr<ID2D1Bitmap1> frame_bitmap;
+        hr = d2d_context_->CreateBitmap(D2D1::SizeU(canvas_width, canvas_height),
+                                        canvas.data(),
+                                        static_cast<UINT32>(canvas_stride),
+                                        &bitmap_props,
+                                        &frame_bitmap);
+        if (FAILED(hr) || !frame_bitmap) {
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+
+        ULONGLONG delay_ms = frame_delay_cs > 0 ? static_cast<ULONGLONG>(frame_delay_cs) * 10ull : kGifDefaultDelayMs;
+        delay_ms = std::max<ULONGLONG>(delay_ms, kGifMinDelayMs);
+        if (delay_ms > std::numeric_limits<UINT>::max()) {
+            delay_ms = std::numeric_limits<UINT>::max();
+        }
+
+        animation_frames_.push_back(frame_bitmap);
+        animation_frame_delays_ms_.push_back(static_cast<UINT>(delay_ms));
+
+        prev_disposal = frame_disposal;
+        prev_left = frame_left;
+        prev_top = frame_top;
+        prev_width = frame_rect_width;
+        prev_height = frame_rect_height;
+    }
+
+    if (animation_frames_.empty()) {
+        return E_FAIL;
+    }
+
+    out_image->type = ImageType::Raster;
+    out_image->raster = animation_frames_[0];
+    out_image->width = static_cast<float>(canvas_width);
+    out_image->height = static_cast<float>(canvas_height);
+    animation_frame_index_ = 0;
+    return S_OK;
+}
+
 HRESULT QmiApp::LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg, float* out_width, float* out_height) {
     if (!out_svg || !d2d_context5_) {
         return E_NOINTERFACE;
@@ -1267,6 +1619,8 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
         return false;
     }
 
+    ClearAnimationState();
+
     const fs::path path = images_[index];
     const std::wstring ext = ToLower(path.extension().wstring());
 
@@ -1282,11 +1636,15 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
             image.svg = svg;
         }
     } else {
-        ComPtr<ID2D1Bitmap1> bmp;
-        hr = LoadRasterBitmap(path, 0, 0, &bmp, &image.width, &image.height);
-        if (SUCCEEDED(hr) && bmp) {
-            image.type = ImageType::Raster;
-            image.raster = bmp;
+        if (IsGifExtension(path)) {
+            hr = LoadGifAnimation(path, &image);
+        } else {
+            ComPtr<ID2D1Bitmap1> bmp;
+            hr = LoadRasterBitmap(path, 0, 0, &bmp, &image.width, &image.height);
+            if (SUCCEEDED(hr) && bmp) {
+                image.type = ImageType::Raster;
+                image.raster = bmp;
+            }
         }
     }
 
@@ -1306,6 +1664,10 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
 
     if (reset_view && fit_on_switch_) {
         ResetView();
+    }
+
+    if (animation_frames_.size() > 1) {
+        ScheduleNextAnimationFrame();
     }
 
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1851,7 +2213,7 @@ void QmiApp::OpenFileDialog() {
     ofn.hwndOwner = hwnd_;
     ofn.lpstrFile = file_path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = L"Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.svg\0All Files\0*.*\0";
+    ofn.lpstrFilter = L"Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.gif;*.svg\0All Files\0*.*\0";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
     ofn.lpstrDefExt = L"jpg";
 
@@ -2278,6 +2640,18 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
 
         case WM_TIMER:
+            if (wparam == kAnimationTimerId) {
+                KillTimer(hwnd_, kAnimationTimerId);
+                if (animation_frames_.size() <= 1 || animation_frame_delays_ms_.size() != animation_frames_.size() ||
+                    current_image_.type != ImageType::Raster) {
+                    return 0;
+                }
+                animation_frame_index_ = (animation_frame_index_ + 1) % animation_frames_.size();
+                current_image_.raster = animation_frames_[animation_frame_index_];
+                RequestRender();
+                ScheduleNextAnimationFrame();
+                return 0;
+            }
             if (wparam == kRenderTimerId) {
                 KillTimer(hwnd_, kRenderTimerId);
                 render_timer_armed_ = false;
@@ -2320,6 +2694,7 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             break;
 
         case WM_DESTROY:
+            ClearAnimationState();
             if (render_timer_armed_) {
                 KillTimer(hwnd_, kRenderTimerId);
                 render_timer_armed_ = false;
@@ -2480,7 +2855,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                  nullptr);
             state->about_text = CreateWindowExW(0,
                                                 L"STATIC",
-                                                L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / webp / svg",
+                                                L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / webp / gif / svg",
                                                 WS_CHILD | WS_VISIBLE,
                                                 0,
                                                 0,
