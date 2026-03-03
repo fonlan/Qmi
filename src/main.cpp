@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <commctrl.h>
 #include <commdlg.h>
 #include <d2d1_3.h>
 #include <d3d11_1.h>
@@ -43,6 +44,7 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "comdlg32.lib")
+#pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "advapi32.lib")
 
@@ -83,6 +85,7 @@ constexpr int kCtrlAssociationApply = 2200;
 constexpr int kCtrlAssociationSelectAll = 2201;
 constexpr int kCtrlAssociationClearAll = 2202;
 constexpr int kCtrlAssociationCheckboxBase = 2300;
+constexpr int kCtrlShortcutsTable = 2400;
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -131,6 +134,55 @@ bool IsAssociationCheckboxControlId(int control_id) {
     const int lower = kCtrlAssociationCheckboxBase;
     const int upper = lower + static_cast<int>(kAssociationTypes.size());
     return control_id >= lower && control_id < upper;
+}
+
+void InitializeShortcutsTable(HWND table_hwnd) {
+    if (!table_hwnd) {
+        return;
+    }
+
+    ListView_SetExtendedListViewStyleEx(
+        table_hwnd, LVS_EX_GRIDLINES | LVS_EX_FULLROWSELECT, LVS_EX_GRIDLINES | LVS_EX_FULLROWSELECT);
+
+    LVCOLUMNW column{};
+    column.mask = LVCF_FMT | LVCF_TEXT;
+    column.fmt = LVCFMT_LEFT;
+    column.pszText = const_cast<LPWSTR>(L"\u6309\u952e");
+    ListView_InsertColumn(table_hwnd, 0, &column);
+    column.pszText = const_cast<LPWSTR>(L"\u529f\u80fd");
+    ListView_InsertColumn(table_hwnd, 1, &column);
+
+    struct ShortcutRow {
+        const wchar_t* key = L"";
+        const wchar_t* action = L"";
+    };
+    constexpr std::array<ShortcutRow, 3> kRows = {{
+        {L"Left / Up", L"\u4e0a\u4e00\u5f20\u56fe\u7247"},
+        {L"Right / Down", L"\u4e0b\u4e00\u5f20\u56fe\u7247"},
+        {L"0", L"\u91cd\u7f6e\u7f29\u653e\u4e0e\u5e73\u79fb"},
+    }};
+
+    for (int i = 0; i < static_cast<int>(kRows.size()); ++i) {
+        LVITEMW item{};
+        item.mask = LVIF_TEXT;
+        item.iItem = i;
+        item.pszText = const_cast<LPWSTR>(kRows[i].key);
+        const int index = ListView_InsertItem(table_hwnd, &item);
+        if (index >= 0) {
+            ListView_SetItemText(table_hwnd, index, 1, const_cast<LPWSTR>(kRows[i].action));
+        }
+    }
+}
+
+void ResizeShortcutsTableColumns(HWND table_hwnd, int table_width) {
+    if (!table_hwnd) {
+        return;
+    }
+    const int safe_width = std::max(200, table_width);
+    const int key_width = Clamp((safe_width * 38) / 100, 110, safe_width - 100);
+    const int action_width = std::max(90, safe_width - key_width - 2);
+    ListView_SetColumnWidth(table_hwnd, 0, key_width);
+    ListView_SetColumnWidth(table_hwnd, 1, action_width);
 }
 
 std::wstring ToLower(std::wstring s) {
@@ -641,7 +693,8 @@ struct LoadedImage {
 enum class SettingsPage {
     General = 0,
     Associations = 1,
-    About = 2
+    Shortcuts = 2,
+    About = 3
 };
 
 struct SettingsWindowState {
@@ -661,6 +714,7 @@ struct SettingsWindowState {
     HWND association_apply_button = nullptr;
     HWND association_status = nullptr;
 
+    HWND shortcuts_table = nullptr;
     HWND about_text = nullptr;
 
     HFONT nav_font = nullptr;
@@ -734,6 +788,7 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
         Clamp(page_index, static_cast<int>(SettingsPage::General), static_cast<int>(SettingsPage::About));
     const bool show_general = state->active_page == static_cast<int>(SettingsPage::General);
     const bool show_associations = state->active_page == static_cast<int>(SettingsPage::Associations);
+    const bool show_shortcuts = state->active_page == static_cast<int>(SettingsPage::Shortcuts);
     const bool show_about = state->active_page == static_cast<int>(SettingsPage::About);
 
     ShowWindow(state->fit_checkbox, show_general ? SW_SHOW : SW_HIDE);
@@ -748,6 +803,7 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
         ShowWindow(checkbox, show_associations ? SW_SHOW : SW_HIDE);
     }
 
+    ShowWindow(state->shortcuts_table, show_shortcuts ? SW_SHOW : SW_HIDE);
     ShowWindow(state->about_text, show_about ? SW_SHOW : SW_HIDE);
     if (state->nav_list) {
         InvalidateRect(state->nav_list, nullptr, FALSE);
@@ -822,6 +878,9 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
                TRUE);
 
     MoveWindow(state->about_text, panel_x + kPanelPaddingX, panel_y + 8, text_width, std::max(40, panel_height - 16), TRUE);
+    MoveWindow(
+        state->shortcuts_table, panel_x + kPanelPaddingX, panel_y + 8, text_width, std::max(40, panel_height - 16), TRUE);
+    ResizeShortcutsTableColumns(state->shortcuts_table, text_width);
 }
 }  // namespace
 
@@ -1000,6 +1059,13 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
 
     const HRESULT coinit_hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(coinit_hr) && coinit_hr != RPC_E_CHANGED_MODE) {
+        return false;
+    }
+
+    INITCOMMONCONTROLSEX common_controls{};
+    common_controls.dwSize = sizeof(common_controls);
+    common_controls.dwICC = ICC_LISTVIEW_CLASSES;
+    if (!InitCommonControlsEx(&common_controls)) {
         return false;
     }
 
@@ -3576,6 +3642,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             if (state->nav_list) {
                 SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5e38\u89c4"));
                 SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5173\u8054"));
+                SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5feb\u6377\u952e"));
                 SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5173\u4e8e"));
                 SendMessageW(state->nav_list, LB_SETCURSEL, static_cast<WPARAM>(SettingsPage::General), 0);
             }
@@ -3709,6 +3776,20 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                 nullptr,
                                                 nullptr,
                                                 nullptr);
+            state->shortcuts_table = CreateWindowExW(0,
+                                                     WC_LISTVIEWW,
+                                                     nullptr,
+                                                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | LVS_REPORT |
+                                                         LVS_SINGLESEL | LVS_NOSORTHEADER,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     hwnd,
+                                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlShortcutsTable)),
+                                                     nullptr,
+                                                     nullptr);
+            InitializeShortcutsTable(state->shortcuts_table);
 
             SetControlFont(state->nav_list, state->nav_font);
             SetControlFont(state->fit_checkbox, state->body_font);
@@ -3721,6 +3802,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             SetControlFont(state->association_clear_all_button, state->body_font);
             SetControlFont(state->association_apply_button, state->body_font);
             SetControlFont(state->association_status, state->body_font);
+            SetControlFont(state->shortcuts_table, state->body_font);
             SetControlFont(state->about_text, state->body_font);
 
             SetActiveSettingsPage(state, static_cast<int>(SettingsPage::General));

@@ -44,19 +44,20 @@
   - SVG files are rasterized for filmstrip thumbnails (no placeholder-only SVG cells).
 - Right-click context menu: `打开...`, `设置...`, `退出`.
 - Settings window uses a two-column layout:
-  - Left navigation menu: `常规`, `关联`, `关于`
+  - Left navigation menu: `常规`, `关联`, `快捷键`, `关于`
   - Left navigation has no header label and uses a compact width
   - A visible vertical divider line is shown between the left navigation and right content panel
   - Visual style follows a modern web-like modal look with minimal, plain background treatment
   - Left navigation area and right options area are borderless (no inset/client-edge frames)
   - Custom tinted background blocks are removed; selection is indicated by typography/accent only
-  - Right panel does not repeat page names like `常规` / `关联` / `关于`; those labels appear only in the left navigation
+  - Right panel does not repeat page names like `常规` / `关联` / `快捷键` / `关于`; those labels appear only in the left navigation
   - Right-side option text/background rendering is transparent (no filled text backing)
   - Existing toggles are under `常规`:
     - Fit-to-window when switching image
     - Smooth interpolation while zooming
   - `关联` page provides per-extension checkboxes (`.jpg/.jpeg/.png/.bmp/.ico/.webp/.gif/.heic/.heif/.svg`) and `全选` / `全不选` / `应用关联` actions.
   - Applying associations writes/removes current-user (`HKCU\Software\Classes`) ProgID mappings for selected extensions, then refreshes shell association cache.
+  - `快捷键` page shows a bordered shortcut table (keys/actions) for quick reference, without repeating a page title in the right panel.
   - `关于` remains informational.
 - Keyboard:
   - `Left/Up`: previous image
