@@ -44,6 +44,7 @@
   - SVG files are rasterized for filmstrip thumbnails (no placeholder-only SVG cells).
 - Right-click context menu: `打开...`, `设置...`, `退出`.
 - Settings window uses a two-column layout:
+  - Settings window opens centered in the current monitor work area where the main window is located
   - Left navigation menu: `常规`, `关联`, `快捷键`, `关于`
   - Left navigation has no header label and uses a compact width
   - A visible vertical divider line is shown between the left navigation and right content panel

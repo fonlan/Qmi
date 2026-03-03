@@ -86,6 +86,8 @@ constexpr int kCtrlAssociationSelectAll = 2201;
 constexpr int kCtrlAssociationClearAll = 2202;
 constexpr int kCtrlAssociationCheckboxBase = 2300;
 constexpr int kCtrlShortcutsTable = 2400;
+constexpr int kSettingsWindowWidth = 700;
+constexpr int kSettingsWindowHeight = 460;
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -134,6 +136,21 @@ bool IsAssociationCheckboxControlId(int control_id) {
     const int lower = kCtrlAssociationCheckboxBase;
     const int upper = lower + static_cast<int>(kAssociationTypes.size());
     return control_id >= lower && control_id < upper;
+}
+
+RECT GetMonitorWorkAreaFromWindow(HWND hwnd) {
+    RECT fallback = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    const HMONITOR monitor = MonitorFromWindow(hwnd ? hwnd : GetDesktopWindow(), MONITOR_DEFAULTTONEAREST);
+    if (!monitor) {
+        return fallback;
+    }
+
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(monitor, &mi)) {
+        return fallback;
+    }
+    return mi.rcWork;
 }
 
 void InitializeShortcutsTable(HWND table_hwnd) {
@@ -3064,14 +3081,20 @@ void QmiApp::OpenSettingsWindow() {
         return;
     }
 
+    const RECT work_area = GetMonitorWorkAreaFromWindow(hwnd_);
+    const int work_width = work_area.right - work_area.left;
+    const int work_height = work_area.bottom - work_area.top;
+    const int x = work_area.left + std::max(0, (work_width - kSettingsWindowWidth) / 2);
+    const int y = work_area.top + std::max(0, (work_height - kSettingsWindowHeight) / 2);
+
     settings_hwnd_ = CreateWindowExW(WS_EX_APPWINDOW,
                                      kSettingsClassName,
                                      L"Qmi \u8bbe\u7f6e",
                                      WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
-                                     CW_USEDEFAULT,
-                                     CW_USEDEFAULT,
-                                     700,
-                                     460,
+                                     x,
+                                     y,
+                                     kSettingsWindowWidth,
+                                     kSettingsWindowHeight,
                                      hwnd_,
                                      nullptr,
                                      hinstance_,
