@@ -487,7 +487,7 @@ private:
     float GetBaseImageScale(const D2D1_RECT_F& viewport) const;
     D2D1_RECT_F GetImageDestinationRect(const D2D1_RECT_F& viewport) const;
     D2D1_RECT_F GetOpenButtonRect(const D2D1_RECT_F& viewport) const;
-    TitleButtons GetTitleButtons(const D2D1_RECT_F& viewport) const;
+    TitleButtons GetTitleButtons() const;
     TitleButton HitTestTitleButton(POINT client_pt) const;
     bool HitTestOpenButton(POINT client_pt) const;
     bool IsPointOverVisibleImage(POINT client_pt, const D2D1_RECT_F& viewport) const;
@@ -1866,23 +1866,21 @@ D2D1_RECT_F QmiApp::GetOpenButtonRect(const D2D1_RECT_F& viewport) const {
     return D2D1::RectF(cx - width * 0.5f, cy - height * 0.5f, cx + width * 0.5f, cy + height * 0.5f);
 }
 
-TitleButtons QmiApp::GetTitleButtons(const D2D1_RECT_F& viewport) const {
+TitleButtons QmiApp::GetTitleButtons() const {
     TitleButtons b{};
 
-    const int top = static_cast<int>(std::lround(viewport.top + 10.0f));
-    const int right = static_cast<int>(std::lround(viewport.right - 10.0f));
+    if (!hwnd_) {
+        return b;
+    }
+
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    const int top = rc.top;
+    const int right = rc.right;
 
     b.close_rect = RECT{right - kTitleButtonWidth, top, right, top + kTitleButtonHeight};
     b.max_rect = RECT{right - kTitleButtonWidth * 2, top, right - kTitleButtonWidth, top + kTitleButtonHeight};
     b.min_rect = RECT{right - kTitleButtonWidth * 3, top, right - kTitleButtonWidth * 2, top + kTitleButtonHeight};
-
-    const int min_left = static_cast<int>(std::lround(viewport.left + 10.0f));
-    if (b.min_rect.left < min_left) {
-        const int shift = min_left - b.min_rect.left;
-        OffsetRect(&b.min_rect, shift, 0);
-        OffsetRect(&b.max_rect, shift, 0);
-        OffsetRect(&b.close_rect, shift, 0);
-    }
 
     return b;
 }
@@ -1892,10 +1890,7 @@ TitleButton QmiApp::HitTestTitleButton(POINT client_pt) const {
         return TitleButton::None;
     }
 
-    RECT rc{};
-    GetClientRect(hwnd_, &rc);
-    const D2D1_RECT_F viewport = GetImageViewport(static_cast<float>(rc.right - rc.left), static_cast<float>(rc.bottom - rc.top));
-    const TitleButtons buttons = GetTitleButtons(viewport);
+    const TitleButtons buttons = GetTitleButtons();
 
     if (PtInRect(&buttons.close_rect, client_pt)) {
         return TitleButton::Close;
@@ -2300,7 +2295,7 @@ void QmiApp::Render() {
     }
 
     DrawFilmStrip(strip);
-    DrawTitleButtons(GetTitleButtons(viewport));
+    DrawTitleButtons(GetTitleButtons());
 
     if (!current_error_.empty()) {
         DrawMessageOverlay(current_error_);
