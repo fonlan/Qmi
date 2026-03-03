@@ -3013,11 +3013,11 @@ void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
 }
 
 void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
-    if (!d2d_context_ || !brush_panel_ || !brush_thumb_bg_) {
+    if (!d2d_context_ || !brush_viewport_bg_ || !brush_thumb_bg_) {
         return;
     }
 
-    d2d_context_->FillRectangle(strip_rect, brush_panel_.Get());
+    d2d_context_->FillRectangle(strip_rect, brush_viewport_bg_.Get());
 
     visible_thumbs_.clear();
     if (images_.empty()) {
