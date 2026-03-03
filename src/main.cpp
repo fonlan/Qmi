@@ -3037,22 +3037,94 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
     const float available_h = std::max(40.0f, (strip_rect.bottom - strip_rect.top) - 2.0f * padding_y);
     const float medium_item_h = std::max(36.0f, available_h * 0.92f);
     const float medium_item_w = medium_item_h * 1.3f;
-    const float slot_step = medium_item_w + gap;
-    const int slots = std::max(1, static_cast<int>((strip_width - padding_x * 2.0f + gap) / slot_step));
-    const int max_start = std::max(0, static_cast<int>(images_.size()) - slots);
+    const int image_count = static_cast<int>(images_.size());
+    const float side_hover_reserve = Clamp(medium_item_w * kFilmStripHoverScaleBoost * 0.9f, 8.0f, 24.0f);
+    const float horizontal_padding = padding_x + side_hover_reserve;
+    const float inner_left = strip_rect.left + horizontal_padding;
+    const float inner_width = std::max(0.0f, strip_width - horizontal_padding * 2.0f);
+    const float baseline = strip_rect.bottom - padding_y;
 
-    int start = 0;
-    if (film_strip_scroll_index_ >= 0) {
-        start = Clamp(film_strip_scroll_index_, 0, max_start);
-    } else if (current_index_ >= 0) {
-        start = Clamp(current_index_ - slots / 2, 0, max_start);
+    auto compute_target_scale = [&](int index) {
+        float target_scale = kFilmStripSmallScale;
+        if (current_index_ < 0) {
+            target_scale = kFilmStripMediumScale;
+        } else {
+            const int index_distance = std::abs(index - current_index_);
+            if (index_distance == 0) {
+                target_scale = kFilmStripLargeScale;
+            } else if (index_distance == 1) {
+                target_scale = kFilmStripMediumScale;
+            }
+        }
+        if (index == hover_thumbnail_index_) {
+            target_scale += kFilmStripHoverScaleBoost;
+        }
+        return target_scale;
+    };
+
+    std::vector<float> target_scales(image_count, kFilmStripSmallScale);
+    std::vector<float> layout_widths(image_count, medium_item_w * kFilmStripSmallScale);
+    for (int i = 0; i < image_count; ++i) {
+        const float target_scale = compute_target_scale(i);
+        target_scales[i] = target_scale;
+        const float previous_scale = thumbnail_draw_scales_[i];
+        const float layout_scale = (previous_scale > 0.0f) ? std::max(previous_scale, target_scale) : target_scale;
+        layout_widths[i] = medium_item_w * layout_scale;
     }
 
-    const int end = std::min(static_cast<int>(images_.size()), start + slots);
+    auto fits_width = [&](float content_width, float candidate_width) {
+        const float next_width = content_width + ((content_width > 0.0f) ? gap : 0.0f) + candidate_width;
+        return next_width <= inner_width + 0.01f;
+    };
+
+    int start = 0;
+    int end = 0;
+    float packed_width = 0.0f;
+
+    if (film_strip_scroll_index_ >= 0) {
+        start = Clamp(film_strip_scroll_index_, 0, image_count - 1);
+        end = start;
+        while (end < image_count && (end == start || fits_width(packed_width, layout_widths[end]))) {
+            packed_width += ((packed_width > 0.0f) ? gap : 0.0f) + layout_widths[end];
+            ++end;
+        }
+    } else if (current_index_ >= 0) {
+        const int anchor = Clamp(current_index_, 0, image_count - 1);
+        start = anchor;
+        end = anchor + 1;
+        const float anchor_width = layout_widths[anchor];
+        const float side_capacity = std::max(0.0f, inner_width * 0.5f - anchor_width * 0.5f);
+        float used_left = 0.0f;
+        for (int i = anchor - 1; i >= 0; --i) {
+            const float needed = gap + layout_widths[i];
+            if (used_left + needed > side_capacity + 0.01f) {
+                break;
+            }
+            used_left += needed;
+            start = i;
+        }
+        float used_right = 0.0f;
+        for (int i = anchor + 1; i < image_count; ++i) {
+            const float needed = gap + layout_widths[i];
+            if (used_right + needed > side_capacity + 0.01f) {
+                break;
+            }
+            used_right += needed;
+            end = i + 1;
+        }
+    } else {
+        while (end < image_count && (end == start || fits_width(packed_width, layout_widths[end]))) {
+            packed_width += ((packed_width > 0.0f) ? gap : 0.0f) + layout_widths[end];
+            ++end;
+        }
+    }
+
+    if (end <= start) {
+        start = Clamp((current_index_ >= 0) ? current_index_ : 0, 0, image_count - 1);
+        end = std::min(image_count, start + 1);
+    }
+
     const int visible_count = std::max(0, end - start);
-    const float inner_left = strip_rect.left + padding_x;
-    const float inner_width = std::max(0.0f, strip_width - padding_x * 2.0f);
-    const float baseline = strip_rect.bottom - padding_y;
     bool has_pending_scale_animation = false;
 
     std::vector<float> draw_scales;
@@ -3060,21 +3132,7 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
     draw_scales.reserve(visible_count);
     draw_widths.reserve(visible_count);
     for (int i = start; i < end; ++i) {
-        float target_scale = kFilmStripSmallScale;
-        if (current_index_ < 0) {
-            target_scale = kFilmStripMediumScale;
-        } else {
-            const int index_distance = std::abs(i - current_index_);
-            if (index_distance == 0) {
-                target_scale = kFilmStripLargeScale;
-            } else if (index_distance == 1) {
-                target_scale = kFilmStripMediumScale;
-            }
-        }
-        if (i == hover_thumbnail_index_) {
-            target_scale += kFilmStripHoverScaleBoost;
-        }
-
+        const float target_scale = target_scales[i];
         float draw_scale = target_scale;
         const float previous_scale = thumbnail_draw_scales_[i];
         if (previous_scale > 0.0f) {
@@ -3098,6 +3156,20 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
         }
     }
     float x = inner_left + std::max(0.0f, (inner_width - content_width) * 0.5f);
+    if (film_strip_scroll_index_ < 0 && current_index_ >= start && current_index_ < end && !draw_widths.empty()) {
+        const int anchor = current_index_;
+        float width_before_anchor = 0.0f;
+        for (int i = start; i < anchor; ++i) {
+            const size_t layout_index = static_cast<size_t>(i - start);
+            width_before_anchor += draw_widths[layout_index] + gap;
+        }
+        const float anchor_width = draw_widths[static_cast<size_t>(anchor - start)];
+        const float center_x = inner_left + inner_width * 0.5f;
+        x = center_x - (width_before_anchor + anchor_width * 0.5f);
+        const float min_x = inner_left;
+        const float max_x = inner_left + std::max(0.0f, inner_width - content_width);
+        x = Clamp(x, min_x, max_x);
+    }
     int remaining_decode_budget = kThumbnailDecodeBudgetPerFrame;
     bool has_pending_visible_thumbnail = false;
 
