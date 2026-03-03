@@ -74,8 +74,9 @@ constexpr int kAppIconResourceId = 101;
 constexpr UINT kMenuOpenFile = 1001;
 constexpr UINT kMenuCopyImage = 1002;
 constexpr UINT kMenuCopyFile = 1003;
-constexpr UINT kMenuSettings = 1004;
-constexpr UINT kMenuExit = 1005;
+constexpr UINT kMenuDeleteFile = 1004;
+constexpr UINT kMenuSettings = 1005;
+constexpr UINT kMenuExit = 1006;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 constexpr UINT_PTR kAnimationTimerId = 3;
@@ -1013,6 +1014,7 @@ private:
     void OpenSettingsWindow();
     bool CopyCurrentImageToClipboard();
     bool CopyCurrentFileToClipboard();
+    bool MoveCurrentFileToRecycleBin();
     HRESULT ExtractCurrentImagePixels(UINT32* out_width,
                                       UINT32* out_height,
                                       std::vector<std::uint8_t>* out_pixels);
@@ -3693,6 +3695,101 @@ bool QmiApp::CopyCurrentFileToClipboard() {
     return copied;
 }
 
+bool QmiApp::MoveCurrentFileToRecycleBin() {
+    if (current_image_.path.empty()) {
+        return false;
+    }
+
+    std::error_code path_ec;
+    fs::path delete_path = fs::absolute(current_image_.path, path_ec);
+    if (path_ec) {
+        delete_path = current_image_.path;
+    }
+    if (delete_path.empty()) {
+        return false;
+    }
+
+    fs::path next_hint;
+    if (current_index_ >= 0 && current_index_ < static_cast<int>(images_.size()) && images_.size() > 1) {
+        const int next_index = (current_index_ + 1 < static_cast<int>(images_.size())) ? (current_index_ + 1) : (current_index_ - 1);
+        if (next_index >= 0 && next_index < static_cast<int>(images_.size())) {
+            next_hint = images_[next_index];
+        }
+    }
+
+    std::wstring delete_from = delete_path.lexically_normal().wstring();
+    if (delete_from.empty()) {
+        return false;
+    }
+    // SHFileOperation requires a double-null-terminated path list.
+    delete_from.push_back(L'\0');
+
+    SHFILEOPSTRUCTW op{};
+    op.wFunc = FO_DELETE;
+    op.pFrom = delete_from.c_str();
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOCONFIRMMKDIR | FOF_SILENT | FOF_NOERRORUI;
+    const int op_result = SHFileOperationW(&op);
+    if (op_result != 0 || op.fAnyOperationsAborted) {
+        return false;
+    }
+
+    if (deferred_directory_build_pending_) {
+        deferred_directory_build_pending_ = false;
+        deferred_directory_target_norm_.clear();
+        if (hwnd_) {
+            KillTimer(hwnd_, kStartupScanTimerId);
+        }
+    }
+
+    fs::path next_path;
+    if (!next_hint.empty()) {
+        std::error_code next_ec;
+        if (fs::is_regular_file(next_hint, next_ec) && !next_ec) {
+            next_path = next_hint;
+        }
+    }
+    if (next_path.empty()) {
+        const fs::path directory = delete_path.parent_path();
+        if (!directory.empty()) {
+            const std::optional<fs::path> first_supported = FindFirstSupportedImageInDirectory(directory);
+            if (first_supported) {
+                next_path = *first_supported;
+            }
+        }
+    }
+
+    if (!next_path.empty() && OpenImagePath(next_path, true)) {
+        return true;
+    }
+
+    ClearAnimationState();
+    ClearDoubleClickZoomRestore();
+    current_image_ = LoadedImage{};
+    current_error_.clear();
+    ClearCurrentImageInfo();
+    images_.clear();
+    thumbnails_.clear();
+    thumbnail_draw_scales_.clear();
+    visible_thumbs_.clear();
+    current_index_ = -1;
+    film_strip_scroll_index_ = -1;
+    hover_open_button_ = false;
+    pressed_open_button_ = false;
+    hover_edge_nav_button_ = EdgeNavButton::None;
+    visible_edge_nav_button_ = EdgeNavButton::None;
+    pressed_edge_nav_button_ = EdgeNavButton::None;
+    hover_thumbnail_index_ = -1;
+    zoom_ = 1.0f;
+    pan_x_ = 0.0f;
+    pan_y_ = 0.0f;
+
+    if (hwnd_) {
+        SetWindowTextW(hwnd_, L"Qmi");
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+    return true;
+}
+
 void QmiApp::ShowContextMenu(POINT screen_pt) {
     HMENU menu = CreatePopupMenu();
     if (!menu) {
@@ -3701,9 +3798,11 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
 
     const bool can_copy_image = IsRenderableImageType(current_image_.type);
     const bool can_copy_file = !current_image_.path.empty();
+    const bool can_delete_file = can_copy_file;
     AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00...");
     AppendMenuW(menu, can_copy_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImage, L"\u590d\u5236\u56fe\u7247");
     AppendMenuW(menu, can_copy_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyFile, L"\u590d\u5236\u6587\u4ef6");
+    AppendMenuW(menu, can_delete_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuDeleteFile, L"\u5220\u9664\u6587\u4ef6");
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u8bbe\u7f6e...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa");
@@ -3721,6 +3820,14 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
             break;
         case kMenuCopyFile:
             CopyCurrentFileToClipboard();
+            break;
+        case kMenuDeleteFile:
+            if (!MoveCurrentFileToRecycleBin()) {
+                MessageBoxW(hwnd_,
+                            L"\u5220\u9664\u6587\u4ef6\u5931\u8d25\uff0c\u6587\u4ef6\u53ef\u80fd\u4e0d\u5b58\u5728\u6216\u65e0\u6cd5\u79fb\u5165\u56de\u6536\u7ad9\u3002",
+                            L"Qmi",
+                            MB_ICONERROR | MB_OK);
+            }
             break;
         case kMenuSettings:
             OpenSettingsWindow();
@@ -4235,6 +4342,14 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                     return 0;
                 case kMenuCopyFile:
                     CopyCurrentFileToClipboard();
+                    return 0;
+                case kMenuDeleteFile:
+                    if (!MoveCurrentFileToRecycleBin()) {
+                        MessageBoxW(hwnd_,
+                                    L"\u5220\u9664\u6587\u4ef6\u5931\u8d25\uff0c\u6587\u4ef6\u53ef\u80fd\u4e0d\u5b58\u5728\u6216\u65e0\u6cd5\u79fb\u5165\u56de\u6536\u7ad9\u3002",
+                                    L"Qmi",
+                                    MB_ICONERROR | MB_OK);
+                    }
                     return 0;
                 case kMenuSettings:
                     OpenSettingsWindow();
