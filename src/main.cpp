@@ -115,7 +115,7 @@ std::wstring NormalizePathLower(const fs::path& p) {
 bool IsSupportedExtension(const fs::path& p) {
     const std::wstring ext = ToLower(p.extension().wstring());
     return ext == L".jpg" || ext == L".jpeg" || ext == L".png" || ext == L".bmp" || ext == L".webp" ||
-           ext == L".gif" || ext == L".svg";
+           ext == L".gif" || ext == L".svg" || ext == L".ico";
 }
 
 bool IsWebpExtension(const fs::path& p) {
@@ -124,6 +124,10 @@ bool IsWebpExtension(const fs::path& p) {
 
 bool IsGifExtension(const fs::path& p) {
     return ToLower(p.extension().wstring()) == L".gif";
+}
+
+bool IsIcoExtension(const fs::path& p) {
+    return ToLower(p.extension().wstring()) == L".ico";
 }
 
 bool TryReadMetadataUInt(IWICMetadataQueryReader* reader, const wchar_t* query, UINT* out_value) {
@@ -1219,8 +1223,34 @@ HRESULT QmiApp::LoadRasterBitmap(const fs::path& path,
         return hr;
     }
 
+    UINT frame_index = 0;
+    if (IsIcoExtension(path)) {
+        UINT frame_count = 0;
+        if (SUCCEEDED(decoder->GetFrameCount(&frame_count)) && frame_count > 1) {
+            std::uint64_t best_area = 0;
+            UINT best_index = 0;
+            for (UINT i = 0; i < frame_count; ++i) {
+                ComPtr<IWICBitmapFrameDecode> candidate;
+                if (FAILED(decoder->GetFrame(i, &candidate)) || !candidate) {
+                    continue;
+                }
+                UINT candidate_w = 0;
+                UINT candidate_h = 0;
+                if (FAILED(candidate->GetSize(&candidate_w, &candidate_h)) || candidate_w == 0 || candidate_h == 0) {
+                    continue;
+                }
+                const std::uint64_t area = static_cast<std::uint64_t>(candidate_w) * static_cast<std::uint64_t>(candidate_h);
+                if (area > best_area) {
+                    best_area = area;
+                    best_index = i;
+                }
+            }
+            frame_index = best_index;
+        }
+    }
+
     ComPtr<IWICBitmapFrameDecode> frame;
-    hr = decoder->GetFrame(0, &frame);
+    hr = decoder->GetFrame(frame_index, &frame);
     if (FAILED(hr)) {
         return hr;
     }
@@ -2213,7 +2243,7 @@ void QmiApp::OpenFileDialog() {
     ofn.hwndOwner = hwnd_;
     ofn.lpstrFile = file_path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = L"Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.webp;*.gif;*.svg\0All Files\0*.*\0";
+    ofn.lpstrFilter = L"Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.ico;*.webp;*.gif;*.svg\0All Files\0*.*\0";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
     ofn.lpstrDefExt = L"jpg";
 
@@ -2855,7 +2885,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                  nullptr);
             state->about_text = CreateWindowExW(0,
                                                 L"STATIC",
-                                                L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / webp / gif / svg",
+                                                L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / ico / webp / gif / svg",
                                                 WS_CHILD | WS_VISIBLE,
                                                 0,
                                                 0,

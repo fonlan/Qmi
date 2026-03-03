@@ -6,7 +6,7 @@
 - Language: C++20
 - UI/Windowing: Win32 API (custom chrome, borderless main window)
 - Rendering: Direct3D 11 + Direct2D 1.3/1.5
-- Imaging: WIC for `.jpg/.jpeg/.png/.bmp/.gif` (GIF uses frame composition + timer playback), built-in `libwebp` for `.webp`, Direct2D SVG document for `.svg`
+- Imaging: WIC for `.jpg/.jpeg/.png/.bmp/.ico/.gif` (GIF uses frame composition + timer playback), built-in `libwebp` for `.webp`, Direct2D SVG document for `.svg`
 - Build system: CMake (Visual Studio 2022 generator)
 
 ## Repository Layout
@@ -54,7 +54,7 @@
 
 ## Format Support
 
-- Supported extensions: `.jpg`, `.jpeg`, `.png`, `.bmp`, `.webp`, `.gif`, `.svg`.
+- Supported extensions: `.jpg`, `.jpeg`, `.png`, `.bmp`, `.ico`, `.webp`, `.gif`, `.svg`.
 - WebP decoding is built in via `libwebp` (does not require installing a system WIC WebP codec).
 - GIF animated playback is built in via WIC decoder frame composition + `WM_TIMER`.
 
