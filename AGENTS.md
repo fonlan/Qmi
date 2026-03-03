@@ -19,6 +19,7 @@
 - Main window style: `WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX`.
 - No top title bar is drawn.
 - Minimize / maximize / close buttons are custom-drawn in the top-right of the image viewport.
+- Image viewport has zero outer margin/gap (flush to window content area) for a truly borderless look.
 - Areas outside the image viewport are rendered as translucent overlays/panels with alpha `200/255` (~78%).
 - Main window uses `WS_EX_LAYERED` with per-pixel alpha composition via `UpdateLayeredWindow`.
 - In the image viewport, letterboxed area is rendered semi-transparent (non-zero alpha) to avoid mouse pass-through; no opaque underlay is drawn beneath image pixels, so transparent image content remains transparent (no black matte).
