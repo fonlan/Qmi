@@ -20,6 +20,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <cwctype>
 #include <filesystem>
 #include <optional>
@@ -60,6 +62,7 @@ constexpr wchar_t kSettingsClassName[] = L"QmiSettingsWindowClass";
 constexpr UINT kMenuOpenFile = 1001;
 constexpr UINT kMenuSettings = 1002;
 constexpr UINT kMenuExit = 1003;
+constexpr UINT_PTR kRenderTimerId = 1;
 
 constexpr int kCtrlFitOnSwitch = 2001;
 constexpr int kCtrlSmoothSampling = 2002;
@@ -71,7 +74,10 @@ constexpr int kTitleButtonWidth = 46;
 constexpr int kTitleButtonHeight = 34;
 constexpr float kViewportMargin = 12.0f;
 constexpr float kViewportBottomGap = 8.0f;
-constexpr BYTE kWindowOpacityAlpha = 230;
+constexpr ULONGLONG kInteractiveFrameIntervalMs = 16;
+constexpr BYTE kUiChromeAlpha = 200;
+constexpr float kUiChromeOpacity = static_cast<float>(kUiChromeAlpha) / 255.0f;
+constexpr float kViewportLetterboxOpacity = 0.50f;
 
 template <typename T>
 T Clamp(T v, T lo, T hi) {
@@ -156,7 +162,9 @@ private:
     bool InitDeviceIndependentResources();
     bool InitDeviceResources();
     bool CreateWindowSizeResources();
+    bool PresentLayeredFrame();
     void DiscardDeviceResources();
+    void ReleaseLayeredBitmap();
     void CreateBrushes();
     void ApplyWindowBackdrop();
     void ResetView();
@@ -195,6 +203,7 @@ private:
     void ShowContextMenu(POINT screen_pt);
     void OpenFileDialog();
     void OpenSettingsWindow();
+    void RequestRender(bool interactive = false);
 
     LRESULT HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam);
     LRESULT HitTestNonClient(POINT screen_pt) const;
@@ -217,7 +226,8 @@ private:
 
     ComPtr<ID3D11Device> d3d_device_;
     ComPtr<ID3D11DeviceContext> d3d_context_;
-    ComPtr<IDXGISwapChain1> swap_chain_;
+    ComPtr<ID3D11Texture2D> frame_texture_;
+    ComPtr<ID3D11Texture2D> readback_texture_;
 
     ComPtr<IWICImagingFactory> wic_factory_;
     ComPtr<IDWriteFactory> dwrite_factory_;
@@ -230,6 +240,7 @@ private:
     ComPtr<ID2D1SolidColorBrush> brush_accent_;
     ComPtr<ID2D1SolidColorBrush> brush_hover_;
     ComPtr<ID2D1SolidColorBrush> brush_close_hover_;
+    ComPtr<ID2D1SolidColorBrush> brush_viewport_bg_;
     ComPtr<ID2D1SolidColorBrush> brush_image_bg_;
     ComPtr<ID2D1SolidColorBrush> brush_thumb_bg_;
 
@@ -254,6 +265,16 @@ private:
 
     TitleButton hover_button_ = TitleButton::None;
     TitleButton pressed_button_ = TitleButton::None;
+    bool render_timer_armed_ = false;
+    ULONGLONG last_interactive_render_tick_ = 0;
+
+    HDC layered_dc_ = nullptr;
+    HBITMAP layered_bitmap_ = nullptr;
+    HGDIOBJ layered_prev_bitmap_ = nullptr;
+    void* layered_bits_ = nullptr;
+    UINT layered_width_ = 0;
+    UINT layered_height_ = 0;
+    UINT layered_stride_ = 0;
 };
 
 bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<std::wstring>& startup_path) {
@@ -387,7 +408,6 @@ bool QmiApp::CreateMainWindow(int show_cmd) {
         return false;
     }
 
-    SetLayeredWindowAttributes(hwnd_, 0, kWindowOpacityAlpha, LWA_ALPHA);
     DragAcceptFiles(hwnd_, TRUE);
     ShowWindow(hwnd_, show_cmd);
     UpdateWindow(hwnd_);
@@ -490,53 +510,33 @@ bool QmiApp::CreateWindowSizeResources() {
 
     d2d_context_->SetTarget(nullptr);
     target_bitmap_.Reset();
+    frame_texture_.Reset();
+    readback_texture_.Reset();
+    ReleaseLayeredBitmap();
 
-    if (!swap_chain_) {
-        ComPtr<IDXGIDevice> dxgi_device;
-        if (FAILED(d3d_device_.As(&dxgi_device))) {
-            return false;
-        }
-
-        ComPtr<IDXGIAdapter> adapter;
-        if (FAILED(dxgi_device->GetAdapter(&adapter))) {
-            return false;
-        }
-
-        ComPtr<IDXGIFactory2> factory;
-        if (FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))) {
-            return false;
-        }
-
-        DXGI_SWAP_CHAIN_DESC1 desc{};
-        desc.Width = width;
-        desc.Height = height;
-        desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-        desc.SampleDesc.Count = 1;
-        desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        desc.BufferCount = 2;
-        desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
-        desc.Scaling = DXGI_SCALING_STRETCH;
-        desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
-        if (FAILED(factory->CreateSwapChainForHwnd(
-                d3d_device_.Get(), hwnd_, &desc, nullptr, nullptr, &swap_chain_))) {
-            return false;
-        }
-        factory->MakeWindowAssociation(hwnd_, DXGI_MWA_NO_ALT_ENTER);
-        SetLayeredWindowAttributes(hwnd_, 0, kWindowOpacityAlpha, LWA_ALPHA);
-    } else {
-        HRESULT hr = swap_chain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
-        if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
-            DiscardDeviceResources();
-            return InitDeviceResources();
-        }
-        if (FAILED(hr)) {
-            return false;
-        }
-        SetLayeredWindowAttributes(hwnd_, 0, kWindowOpacityAlpha, LWA_ALPHA);
+    D3D11_TEXTURE2D_DESC texture_desc{};
+    texture_desc.Width = width;
+    texture_desc.Height = height;
+    texture_desc.MipLevels = 1;
+    texture_desc.ArraySize = 1;
+    texture_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    texture_desc.SampleDesc.Count = 1;
+    texture_desc.Usage = D3D11_USAGE_DEFAULT;
+    texture_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    if (FAILED(d3d_device_->CreateTexture2D(&texture_desc, nullptr, &frame_texture_))) {
+        return false;
     }
 
-    ComPtr<IDXGISurface> back_buffer;
-    if (FAILED(swap_chain_->GetBuffer(0, IID_PPV_ARGS(&back_buffer)))) {
+    D3D11_TEXTURE2D_DESC readback_desc = texture_desc;
+    readback_desc.Usage = D3D11_USAGE_STAGING;
+    readback_desc.BindFlags = 0;
+    readback_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    if (FAILED(d3d_device_->CreateTexture2D(&readback_desc, nullptr, &readback_texture_))) {
+        return false;
+    }
+
+    ComPtr<IDXGISurface> target_surface;
+    if (FAILED(frame_texture_.As(&target_surface))) {
         return false;
     }
 
@@ -544,12 +544,43 @@ bool QmiApp::CreateWindowSizeResources() {
         D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
 
-    if (FAILED(d2d_context_->CreateBitmapFromDxgiSurface(back_buffer.Get(), &bitmap_props, &target_bitmap_))) {
+    if (FAILED(d2d_context_->CreateBitmapFromDxgiSurface(target_surface.Get(), &bitmap_props, &target_bitmap_))) {
         return false;
     }
 
     d2d_context_->SetTarget(target_bitmap_.Get());
     d2d_context_->SetDpi(96.0f, 96.0f);
+
+    if (!layered_dc_) {
+        layered_dc_ = CreateCompatibleDC(nullptr);
+        if (!layered_dc_) {
+            return false;
+        }
+    }
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = static_cast<LONG>(width);
+    bmi.bmiHeader.biHeight = -static_cast<LONG>(height);
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    void* dib_bits = nullptr;
+    HBITMAP dib = CreateDIBSection(layered_dc_, &bmi, DIB_RGB_COLORS, &dib_bits, nullptr, 0);
+    if (!dib || !dib_bits) {
+        if (dib) {
+            DeleteObject(dib);
+        }
+        return false;
+    }
+
+    layered_prev_bitmap_ = SelectObject(layered_dc_, dib);
+    layered_bitmap_ = dib;
+    layered_bits_ = dib_bits;
+    layered_width_ = width;
+    layered_height_ = height;
+    layered_stride_ = width * 4;
 
     thumbnails_.assign(images_.size(), Thumbnail{});
     if (current_index_ >= 0 && current_index_ < static_cast<int>(images_.size())) {
@@ -558,29 +589,49 @@ bool QmiApp::CreateWindowSizeResources() {
     return true;
 }
 
+void QmiApp::ReleaseLayeredBitmap() {
+    if (layered_dc_ && layered_bitmap_) {
+        SelectObject(layered_dc_, layered_prev_bitmap_);
+        DeleteObject(layered_bitmap_);
+    }
+    layered_bitmap_ = nullptr;
+    layered_prev_bitmap_ = nullptr;
+    layered_bits_ = nullptr;
+    layered_width_ = 0;
+    layered_height_ = 0;
+    layered_stride_ = 0;
+}
+
 void QmiApp::CreateBrushes() {
     if (!d2d_context_) {
         return;
     }
 
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xF0F0F0, 0.97f), &brush_text_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x171717, 0.50f), &brush_panel_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x101010, 0.50f), &brush_overlay_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x171717, kUiChromeOpacity), &brush_panel_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x101010, kUiChromeOpacity), &brush_overlay_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x49A1FF, 1.0f), &brush_accent_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xFFFFFF, 0.14f), &brush_hover_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xE81123, 0.82f), &brush_close_hover_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x111111, 0.90f), &brush_image_bg_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x222222, 0.50f), &brush_thumb_bg_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x111111, kViewportLetterboxOpacity), &brush_viewport_bg_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x111111, 1.0f), &brush_image_bg_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x222222, kUiChromeOpacity), &brush_thumb_bg_);
 }
 
 void QmiApp::DiscardDeviceResources() {
     target_bitmap_.Reset();
-    swap_chain_.Reset();
+    frame_texture_.Reset();
+    readback_texture_.Reset();
     d2d_context5_.Reset();
     d2d_context_.Reset();
     d2d_device_.Reset();
     d3d_context_.Reset();
     d3d_device_.Reset();
+    ReleaseLayeredBitmap();
+    if (layered_dc_) {
+        DeleteDC(layered_dc_);
+        layered_dc_ = nullptr;
+    }
 
     brush_text_.Reset();
     brush_panel_.Reset();
@@ -588,6 +639,7 @@ void QmiApp::DiscardDeviceResources() {
     brush_accent_.Reset();
     brush_hover_.Reset();
     brush_close_hover_.Reset();
+    brush_viewport_bg_.Reset();
     brush_image_bg_.Reset();
     brush_thumb_bg_.Reset();
 }
@@ -1100,11 +1152,13 @@ void QmiApp::DrawTitleButtons(const TitleButtons& buttons) {
 }
 
 void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
-    if (!d2d_context_ || !brush_image_bg_) {
+    if (!d2d_context_) {
         return;
     }
-
-    d2d_context_->FillRectangle(viewport, brush_image_bg_.Get());
+    if (brush_viewport_bg_) {
+        // Per-pixel layered windows treat alpha=0 as hit-test transparent; keep viewport letterbox semi-transparent.
+        d2d_context_->FillRectangle(viewport, brush_viewport_bg_.Get());
+    }
 
     if (current_image_.type == ImageType::None) {
         DrawCenteredText(L"Right-click to open an image, or drag and drop a file.", viewport, text_format_.Get());
@@ -1202,8 +1256,46 @@ void QmiApp::DrawMessageOverlay(const std::wstring& text) {
     DrawCenteredText(text, D2D1::RectF(20.0f, size.height - 36.0f, size.width - 20.0f, size.height - 8.0f), small_text_format_.Get());
 }
 
+bool QmiApp::PresentLayeredFrame() {
+    if (!hwnd_ || !d3d_context_ || !frame_texture_ || !readback_texture_ || !layered_dc_ || !layered_bits_) {
+        return false;
+    }
+    if (layered_width_ == 0 || layered_height_ == 0 || layered_stride_ == 0) {
+        return false;
+    }
+
+    d3d_context_->CopyResource(readback_texture_.Get(), frame_texture_.Get());
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    HRESULT hr = d3d_context_->Map(readback_texture_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+        DiscardDeviceResources();
+        return false;
+    }
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    auto* dst = static_cast<std::uint8_t*>(layered_bits_);
+    auto* src = static_cast<const std::uint8_t*>(mapped.pData);
+    const UINT copy_width = layered_width_ * 4;
+    for (UINT y = 0; y < layered_height_; ++y) {
+        memcpy(dst + static_cast<size_t>(y) * layered_stride_, src + static_cast<size_t>(y) * mapped.RowPitch, copy_width);
+    }
+    d3d_context_->Unmap(readback_texture_.Get(), 0);
+
+    RECT wnd_rect{};
+    GetWindowRect(hwnd_, &wnd_rect);
+    POINT dst_pt{wnd_rect.left, wnd_rect.top};
+    POINT src_pt{0, 0};
+    SIZE size{static_cast<LONG>(layered_width_), static_cast<LONG>(layered_height_)};
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+
+    return UpdateLayeredWindow(hwnd_, nullptr, &dst_pt, &size, layered_dc_, &src_pt, 0, &blend, ULW_ALPHA) != FALSE;
+}
+
 void QmiApp::Render() {
-    if (!InitDeviceResources() || !d2d_context_ || !swap_chain_) {
+    if (!InitDeviceResources() || !d2d_context_ || !frame_texture_ || !readback_texture_) {
         return;
     }
 
@@ -1237,10 +1329,11 @@ void QmiApp::Render() {
         InvalidateRect(hwnd_, nullptr, FALSE);
         return;
     }
-
-    hr = swap_chain_->Present(1, 0);
-    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
-        DiscardDeviceResources();
+    if (FAILED(hr)) {
+        return;
+    }
+    if (!PresentLayeredFrame()) {
+        InvalidateRect(hwnd_, nullptr, FALSE);
     }
 }
 
@@ -1315,11 +1408,35 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     }
 }
 
+void QmiApp::RequestRender(bool interactive) {
+    if (!hwnd_) {
+        return;
+    }
+    if (!interactive) {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    const ULONGLONG elapsed = now - last_interactive_render_tick_;
+    if (elapsed >= kInteractiveFrameIntervalMs) {
+        last_interactive_render_tick_ = now;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+
+    if (!render_timer_armed_) {
+        const UINT delay = static_cast<UINT>(kInteractiveFrameIntervalMs - elapsed);
+        SetTimer(hwnd_, kRenderTimerId, std::max<UINT>(1u, delay), nullptr);
+        render_timer_armed_ = true;
+    }
+}
+
 void QmiApp::UpdateHoverState(POINT client_pt) {
     const TitleButton hovered = HitTestTitleButton(client_pt);
     if (hovered != hover_button_) {
         hover_button_ = hovered;
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender(true);
     }
 }
 
@@ -1361,7 +1478,7 @@ void QmiApp::HandleMouseWheel(short wheel_delta, POINT screen_pt) {
     pan_x_ = new_left - (center_x - img_w * new_scale * 0.5f);
     pan_y_ = new_top - (center_y - img_h * new_scale * 0.5f);
 
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    RequestRender(true);
 }
 
 LRESULT QmiApp::HitTestNonClient(POINT screen_pt) const {
@@ -1447,7 +1564,7 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             if (wparam != SIZE_MINIMIZED && d2d_context_) {
                 CreateWindowSizeResources();
             }
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
             return 0;
 
         case WM_PAINT: {
@@ -1474,14 +1591,14 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 pan_x_ += static_cast<float>(dx);
                 pan_y_ += static_cast<float>(dy);
                 drag_last_ = pt;
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender(true);
             }
             return 0;
         }
 
         case WM_MOUSELEAVE:
             hover_button_ = TitleButton::None;
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
             return 0;
 
         case WM_LBUTTONDOWN: {
@@ -1492,7 +1609,7 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             if (button != TitleButton::None) {
                 pressed_button_ = button;
                 SetCapture(hwnd_);
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
                 return 0;
             }
 
@@ -1529,7 +1646,7 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 const TitleButton pressed = pressed_button_;
                 pressed_button_ = TitleButton::None;
                 ReleaseCapture();
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
 
                 if (released_on == pressed) {
                     if (pressed == TitleButton::Close) {
@@ -1591,9 +1708,19 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 MoveSelection(-1);
             } else if (wparam == '0') {
                 ResetView();
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
             }
             return 0;
+
+        case WM_TIMER:
+            if (wparam == kRenderTimerId) {
+                KillTimer(hwnd_, kRenderTimerId);
+                render_timer_armed_ = false;
+                last_interactive_render_tick_ = GetTickCount64();
+                InvalidateRect(hwnd_, nullptr, FALSE);
+                return 0;
+            }
+            break;
 
         case WM_COMMAND:
             switch (LOWORD(wparam)) {
@@ -1612,6 +1739,10 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             break;
 
         case WM_DESTROY:
+            if (render_timer_armed_) {
+                KillTimer(hwnd_, kRenderTimerId);
+                render_timer_armed_ = false;
+            }
             if (settings_hwnd_ && IsWindow(settings_hwnd_)) {
                 DestroyWindow(settings_hwnd_);
                 settings_hwnd_ = nullptr;

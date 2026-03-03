@@ -19,11 +19,13 @@
 - Main window style: `WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX`.
 - No top title bar is drawn.
 - Minimize / maximize / close buttons are custom-drawn in the top-right of the image viewport.
-- Areas outside the image viewport are rendered as 50% translucent overlays/panels.
-- Main window translucency is enforced by `WS_EX_LAYERED` + `SetLayeredWindowAttributes` (constant alpha).
+- Areas outside the image viewport are rendered as translucent overlays/panels with alpha `200/255` (~78%).
+- Main window uses `WS_EX_LAYERED` with per-pixel alpha composition via `UpdateLayeredWindow`.
+- In the image viewport, letterboxed area is rendered semi-transparent (non-zero alpha) to avoid mouse pass-through; no opaque underlay is drawn beneath image pixels, so transparent image content remains transparent (no black matte).
 - Image drag/pan starts only when left click is on the currently visible image content (not just anywhere in viewport).
 - Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
 - Mouse wheel zoom is cursor-anchored and active only inside image viewport.
+- Dragging/zooming repaint requests are throttled to ~60 FPS (16 ms minimum interval); idle state does not run a continuous render loop.
 - Bottom filmstrip shows sibling images in current directory; click thumbnail to switch.
 - Right-click context menu: `Open image...`, `Settings...`, `Exit`.
 - Settings window toggles:
@@ -80,12 +82,14 @@ Build output executable:
   - `GetTitleButtons`
 - Rendering:
   - `Render`
-  - `CreateWindowSizeResources` (swapchain setup)
+  - `CreateWindowSizeResources` (offscreen texture + readback surface setup)
+  - `PresentLayeredFrame` (copy GPU frame to DIB then `UpdateLayeredWindow`)
   - `DrawImageRegion`
   - `DrawFilmStrip`
   - `DrawTitleButtons`
 - Input:
   - Zoom: `HandleMouseWheel`
+  - Repaint throttling: `RequestRender` + `WM_TIMER(kRenderTimerId)`
   - Drag hit-test: `IsPointOverVisibleImage`
   - Window/event dispatch: `HandleMessage`
 
