@@ -78,6 +78,7 @@ constexpr UINT kMenuDeleteFile = 1004;
 constexpr UINT kMenuSettings = 1005;
 constexpr UINT kMenuExit = 1006;
 constexpr UINT kMenuOpenContainingFolder = 1007;
+constexpr UINT kMenuCopyImagePath = 1008;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 constexpr UINT_PTR kAnimationTimerId = 3;
@@ -1016,6 +1017,7 @@ private:
     bool OpenCurrentImageInFolder();
     bool CopyCurrentImageToClipboard();
     bool CopyCurrentFileToClipboard();
+    bool CopyCurrentImagePathToClipboard();
     bool MoveCurrentFileToRecycleBin();
     HRESULT ExtractCurrentImagePixels(UINT32* out_width,
                                       UINT32* out_height,
@@ -3697,6 +3699,57 @@ bool QmiApp::CopyCurrentFileToClipboard() {
     return copied;
 }
 
+bool QmiApp::CopyCurrentImagePathToClipboard() {
+    if (current_image_.path.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    fs::path absolute_path = fs::absolute(current_image_.path, ec);
+    if (ec) {
+        absolute_path = current_image_.path;
+    }
+
+    const std::wstring file_path = absolute_path.lexically_normal().wstring();
+    if (file_path.empty()) {
+        return false;
+    }
+
+    if (file_path.size() > (std::numeric_limits<size_t>::max() / sizeof(wchar_t)) - 1) {
+        return false;
+    }
+    const size_t text_bytes = (file_path.size() + 1) * sizeof(wchar_t);
+    HGLOBAL text_handle = GlobalAlloc(GMEM_MOVEABLE, text_bytes);
+    if (!text_handle) {
+        return false;
+    }
+
+    void* text_memory = GlobalLock(text_handle);
+    if (!text_memory) {
+        GlobalFree(text_handle);
+        return false;
+    }
+    memcpy(text_memory, file_path.c_str(), text_bytes);
+    GlobalUnlock(text_handle);
+
+    if (!OpenClipboard(hwnd_)) {
+        GlobalFree(text_handle);
+        return false;
+    }
+
+    bool copied = false;
+    if (EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, text_handle)) {
+        copied = true;
+        text_handle = nullptr;
+    }
+
+    CloseClipboard();
+    if (text_handle) {
+        GlobalFree(text_handle);
+    }
+    return copied;
+}
+
 bool QmiApp::OpenCurrentImageInFolder() {
     if (current_image_.path.empty()) {
         return false;
@@ -3842,6 +3895,7 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
 
     const bool can_copy_image = IsRenderableImageType(current_image_.type);
     const bool can_copy_file = !current_image_.path.empty();
+    const bool can_copy_path = can_copy_file;
     const bool can_delete_file = can_copy_file;
     const bool can_open_containing_folder = can_copy_file;
     AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00...");
@@ -3851,6 +3905,7 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
                 L"\u6253\u5f00\u6240\u5728\u6587\u4ef6\u5939");
     AppendMenuW(menu, can_copy_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImage, L"\u590d\u5236\u56fe\u7247");
     AppendMenuW(menu, can_copy_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyFile, L"\u590d\u5236\u6587\u4ef6");
+    AppendMenuW(menu, can_copy_path ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImagePath, L"\u590d\u5236\u56fe\u7247\u8def\u5f84");
     AppendMenuW(menu, can_delete_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuDeleteFile, L"\u5220\u9664\u6587\u4ef6");
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u8bbe\u7f6e...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -3877,6 +3932,9 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
             break;
         case kMenuCopyFile:
             CopyCurrentFileToClipboard();
+            break;
+        case kMenuCopyImagePath:
+            CopyCurrentImagePathToClipboard();
             break;
         case kMenuDeleteFile:
             if (!MoveCurrentFileToRecycleBin()) {
@@ -4407,6 +4465,9 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                     return 0;
                 case kMenuCopyFile:
                     CopyCurrentFileToClipboard();
+                    return 0;
+                case kMenuCopyImagePath:
+                    CopyCurrentImagePathToClipboard();
                     return 0;
                 case kMenuDeleteFile:
                     if (!MoveCurrentFileToRecycleBin()) {
