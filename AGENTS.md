@@ -31,6 +31,7 @@
 - Bottom filmstrip shows sibling images in current directory; click thumbnail to switch.
   - Thumbnail decode in filmstrip is progressive (per-frame budgeted), so first frame is prioritized over decoding all visible thumbnails at once.
   - Thumbnail cell background is semi-transparent neutral (non-black), so transparent pixels in thumbnails do not appear with a black matte.
+  - SVG files are rasterized for filmstrip thumbnails (no placeholder-only SVG cells).
 - Right-click context menu: `Open image...`, `Settings...`, `Exit`.
 - Settings window toggles:
   - Fit-to-window when switching image
@@ -106,7 +107,7 @@ Build output executable:
 
 ## Known Limitations
 
-- Filmstrip thumbnails for SVG files are text placeholders (no SVG thumbnail rasterization).
+- No major known limitations currently tracked.
 
 ## Documentation Sync Rules
 - Every time you implement a new function or adjust a function, you need to check whether there are relevant instructions in `AGENTS.md`. If not, you need to add them.

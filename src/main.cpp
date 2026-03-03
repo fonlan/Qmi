@@ -222,6 +222,12 @@ private:
                            float* out_width,
                            float* out_height);
     HRESULT LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg, float* out_width, float* out_height);
+    HRESULT LoadSvgThumbnailBitmap(const fs::path& path,
+                                   UINT max_width,
+                                   UINT max_height,
+                                   ID2D1Bitmap1** out_bitmap,
+                                   float* out_width,
+                                   float* out_height);
     void EnsureThumbnailLoaded(int index);
 
     void Render();
@@ -1071,6 +1077,88 @@ HRESULT QmiApp::LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg
     return S_OK;
 }
 
+HRESULT QmiApp::LoadSvgThumbnailBitmap(const fs::path& path,
+                                       UINT max_width,
+                                       UINT max_height,
+                                       ID2D1Bitmap1** out_bitmap,
+                                       float* out_width,
+                                       float* out_height) {
+    if (!out_bitmap || !d2d_context_ || !d2d_context5_) {
+        return E_POINTER;
+    }
+
+    *out_bitmap = nullptr;
+    if (out_width) {
+        *out_width = 0.0f;
+    }
+    if (out_height) {
+        *out_height = 0.0f;
+    }
+
+    ComPtr<ID2D1SvgDocument> svg;
+    float svg_width = 0.0f;
+    float svg_height = 0.0f;
+    HRESULT hr = LoadSvgDocument(path, &svg, &svg_width, &svg_height);
+    if (FAILED(hr) || !svg) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    float bitmap_width = std::max(1.0f, svg_width);
+    float bitmap_height = std::max(1.0f, svg_height);
+    if (max_width > 0 && max_height > 0 && (bitmap_width > static_cast<float>(max_width) ||
+                                             bitmap_height > static_cast<float>(max_height))) {
+        const float ratio =
+            std::min(static_cast<float>(max_width) / bitmap_width, static_cast<float>(max_height) / bitmap_height);
+        bitmap_width = std::max(1.0f, std::round(bitmap_width * ratio));
+        bitmap_height = std::max(1.0f, std::round(bitmap_height * ratio));
+    }
+
+    const UINT32 target_w = static_cast<UINT32>(bitmap_width);
+    const UINT32 target_h = static_cast<UINT32>(bitmap_height);
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+
+    ComPtr<ID2D1Bitmap1> bitmap;
+    hr = d2d_context_->CreateBitmap(D2D1::SizeU(target_w, target_h), nullptr, 0, &props, &bitmap);
+    if (FAILED(hr) || !bitmap) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    ComPtr<ID2D1Image> previous_target;
+    d2d_context_->GetTarget(&previous_target);
+    D2D1_MATRIX_3X2_F previous_transform{};
+    d2d_context_->GetTransform(&previous_transform);
+
+    d2d_context_->SetTarget(bitmap.Get());
+    d2d_context_->SetTransform(D2D1::Matrix3x2F::Identity());
+    d2d_context_->Clear(D2D1::ColorF(0x000000, 0.0f));
+
+    const float scale_x = bitmap_width / std::max(1.0f, svg_width);
+    const float scale_y = bitmap_height / std::max(1.0f, svg_height);
+    const float draw_scale = std::min(scale_x, scale_y);
+    const float draw_w = svg_width * draw_scale;
+    const float draw_h = svg_height * draw_scale;
+    const float offset_x = (bitmap_width - draw_w) * 0.5f;
+    const float offset_y = (bitmap_height - draw_h) * 0.5f;
+
+    d2d_context_->SetTransform(
+        D2D1::Matrix3x2F::Scale(draw_scale, draw_scale, D2D1::Point2F(0.0f, 0.0f)) *
+        D2D1::Matrix3x2F::Translation(offset_x, offset_y));
+    d2d_context5_->DrawSvgDocument(svg.Get());
+
+    d2d_context_->SetTransform(previous_transform);
+    d2d_context_->SetTarget(previous_target.Get());
+
+    if (out_width) {
+        *out_width = bitmap_width;
+    }
+    if (out_height) {
+        *out_height = bitmap_height;
+    }
+    *out_bitmap = bitmap.Detach();
+    return S_OK;
+}
+
 bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     if (index < 0 || index >= static_cast<int>(images_.size())) {
         return false;
@@ -1189,13 +1277,13 @@ void QmiApp::EnsureThumbnailLoaded(int index) {
     thumb.attempted = true;
 
     const fs::path& path = images_[index];
-    if (ToLower(path.extension().wstring()) == L".svg") {
-        thumb.failed = true;
-        return;
-    }
-
     ComPtr<ID2D1Bitmap1> bitmap;
-    HRESULT hr = LoadRasterBitmap(path, 220, 160, &bitmap, &thumb.width, &thumb.height);
+    HRESULT hr = E_FAIL;
+    if (ToLower(path.extension().wstring()) == L".svg") {
+        hr = LoadSvgThumbnailBitmap(path, 220, 160, &bitmap, &thumb.width, &thumb.height);
+    } else {
+        hr = LoadRasterBitmap(path, 220, 160, &bitmap, &thumb.width, &thumb.height);
+    }
     if (FAILED(hr) || !bitmap) {
         thumb.failed = true;
         return;
