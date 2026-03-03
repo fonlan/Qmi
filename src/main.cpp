@@ -1024,6 +1024,8 @@ private:
     LRESULT HitTestNonClient(POINT screen_pt) const;
     void UpdateHoverState(POINT client_pt);
     void HandleMouseWheel(short wheel_delta, POINT screen_pt);
+    void ClearDoubleClickZoomRestore();
+    void HandleImageDoubleClick(POINT client_pt);
 
     static LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
     static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
@@ -1073,6 +1075,9 @@ private:
     float zoom_ = 1.0f;
     float pan_x_ = 0.0f;
     float pan_y_ = 0.0f;
+    bool dblclick_restore_available_ = false;
+    float dblclick_restore_scale_ = 1.0f;
+    std::wstring dblclick_restore_image_norm_;
 
     bool dragging_image_ = false;
     POINT drag_last_{};
@@ -1537,6 +1542,7 @@ void QmiApp::ResetView() {
     zoom_ = 1.0f;
     pan_x_ = 0.0f;
     pan_y_ = 0.0f;
+    ClearDoubleClickZoomRestore();
 }
 
 void QmiApp::ClearAnimationState() {
@@ -2375,6 +2381,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     }
 
     current_image_ = std::move(image);
+    ClearDoubleClickZoomRestore();
     if (index != current_index_) {
         film_strip_scroll_index_ = -1;
     }
@@ -3731,6 +3738,72 @@ void QmiApp::HandleMouseWheel(short wheel_delta, POINT screen_pt) {
     RequestRender(true);
 }
 
+void QmiApp::ClearDoubleClickZoomRestore() {
+    dblclick_restore_available_ = false;
+    dblclick_restore_scale_ = 1.0f;
+    dblclick_restore_image_norm_.clear();
+}
+
+void QmiApp::HandleImageDoubleClick(POINT client_pt) {
+    if (!d2d_context_ || !IsRenderableImageType(current_image_.type)) {
+        return;
+    }
+
+    const D2D1_SIZE_F size = d2d_context_->GetSize();
+    const D2D1_RECT_F viewport = GetImageViewport(size.width, size.height);
+    if (!IsPointOverVisibleImage(client_pt, viewport)) {
+        return;
+    }
+
+    const float base_scale = std::max(0.0001f, GetBaseImageScale(viewport));
+    const float old_scale = std::max(0.02f, base_scale * zoom_);
+    const bool at_native_scale = std::fabs(old_scale - 1.0f) <= 0.01f;
+    const bool image_larger_than_viewport = base_scale < 0.999f;
+    const std::wstring current_image_norm = NormalizePathLower(current_image_.path);
+
+    float target_scale = old_scale;
+    if (!at_native_scale) {
+        target_scale = 1.0f;
+        if (image_larger_than_viewport && old_scale < 0.99f) {
+            dblclick_restore_available_ = true;
+            dblclick_restore_scale_ = old_scale;
+            dblclick_restore_image_norm_ = current_image_norm;
+        } else {
+            ClearDoubleClickZoomRestore();
+        }
+    } else {
+        if (!image_larger_than_viewport || !dblclick_restore_available_ || dblclick_restore_image_norm_ != current_image_norm) {
+            return;
+        }
+        target_scale = std::max(0.02f, dblclick_restore_scale_);
+        if (std::fabs(target_scale - 1.0f) <= 0.01f) {
+            ClearDoubleClickZoomRestore();
+            return;
+        }
+        ClearDoubleClickZoomRestore();
+    }
+
+    const float img_w = std::max(1.0f, current_image_.width);
+    const float img_h = std::max(1.0f, current_image_.height);
+    const D2D1_RECT_F fit_viewport = GetImageFitViewport(viewport);
+
+    const float center_x = (fit_viewport.left + fit_viewport.right) * 0.5f;
+    const float center_y = (fit_viewport.top + fit_viewport.bottom) * 0.5f;
+    const float image_left_before = center_x - img_w * old_scale * 0.5f + pan_x_;
+    const float image_top_before = center_y - img_h * old_scale * 0.5f + pan_y_;
+    const float image_space_x = (static_cast<float>(client_pt.x) - image_left_before) / old_scale;
+    const float image_space_y = (static_cast<float>(client_pt.y) - image_top_before) / old_scale;
+
+    zoom_ = Clamp(target_scale / base_scale, 0.05f, 40.0f);
+    const float new_scale = std::max(0.02f, base_scale * zoom_);
+    const float new_left = static_cast<float>(client_pt.x) - image_space_x * new_scale;
+    const float new_top = static_cast<float>(client_pt.y) - image_space_y * new_scale;
+    pan_x_ = new_left - (center_x - img_w * new_scale * 0.5f);
+    pan_y_ = new_top - (center_y - img_h * new_scale * 0.5f);
+
+    RequestRender(true);
+}
+
 LRESULT QmiApp::HitTestNonClient(POINT screen_pt) const {
     if (!hwnd_) {
         return HTCLIENT;
@@ -3967,6 +4040,8 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
         }
 
         case WM_LBUTTONDBLCLK: {
+            POINT pt = POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+            HandleImageDoubleClick(pt);
             return 0;
         }
 
