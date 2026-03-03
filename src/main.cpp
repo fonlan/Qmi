@@ -293,6 +293,7 @@ private:
     bool fit_on_switch_ = true;
     bool smooth_sampling_ = true;
     int film_strip_height_ = 120;
+    int film_strip_scroll_index_ = -1;
 
     TitleButton hover_button_ = TitleButton::None;
     TitleButton pressed_button_ = TitleButton::None;
@@ -696,6 +697,7 @@ void QmiApp::ResetView() {
 void QmiApp::BuildDirectoryList(const fs::path& selected_file) {
     images_.clear();
     current_index_ = -1;
+    film_strip_scroll_index_ = -1;
 
     std::error_code ec;
     fs::path target = fs::absolute(selected_file, ec);
@@ -960,6 +962,9 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     }
 
     current_image_ = std::move(image);
+    if (index != current_index_) {
+        film_strip_scroll_index_ = -1;
+    }
     current_index_ = index;
     current_error_.clear();
     hover_open_button_ = false;
@@ -985,6 +990,7 @@ bool QmiApp::OpenImagePath(const fs::path& path, bool reset_view, bool defer_dir
         images_.push_back(path);
         current_index_ = 0;
         thumbnails_.assign(1, Thumbnail{});
+        film_strip_scroll_index_ = -1;
     } else {
         BuildDirectoryList(path);
     }
@@ -1344,10 +1350,13 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
     const float item_h = available_h;
     const float item_w = item_h * 1.3f;
     const int slots = std::max(1, static_cast<int>((strip_rect.right - strip_rect.left - padding * 2.0f + gap) / (item_w + gap)));
+    const int max_start = std::max(0, static_cast<int>(images_.size()) - slots);
 
-    int start = Clamp(current_index_ - slots / 2, 0, std::max(0, static_cast<int>(images_.size()) - slots));
-    if (current_index_ < 0) {
-        start = 0;
+    int start = 0;
+    if (film_strip_scroll_index_ >= 0) {
+        start = Clamp(film_strip_scroll_index_, 0, max_start);
+    } else if (current_index_ >= 0) {
+        start = Clamp(current_index_ - slots / 2, 0, max_start);
     }
 
     const int end = std::min(static_cast<int>(images_.size()), start + slots);
@@ -1598,17 +1607,54 @@ void QmiApp::UpdateHoverState(POINT client_pt) {
 }
 
 void QmiApp::HandleMouseWheel(short wheel_delta, POINT screen_pt) {
-    if (current_image_.type == ImageType::None) {
+    if (!d2d_context_) {
         return;
     }
 
     POINT client_pt = screen_pt;
     ScreenToClient(hwnd_, &client_pt);
 
-    if (!d2d_context_) {
+    const D2D1_SIZE_F size = d2d_context_->GetSize();
+    const D2D1_RECT_F strip = GetFilmStripRect(size.width, size.height);
+    if (client_pt.x >= strip.left && client_pt.x <= strip.right && client_pt.y >= strip.top && client_pt.y <= strip.bottom) {
+        if (images_.empty()) {
+            return;
+        }
+
+        const float padding = 12.0f;
+        const float gap = 10.0f;
+        const float available_h = std::max(40.0f, (strip.bottom - strip.top) - 2.0f * padding);
+        const float item_w = available_h * 1.3f;
+        const int slots = std::max(
+            1, static_cast<int>((strip.right - strip.left - padding * 2.0f + gap) / (item_w + gap)));
+        const int max_start = std::max(0, static_cast<int>(images_.size()) - slots);
+        if (max_start <= 0) {
+            return;
+        }
+
+        int start = 0;
+        if (film_strip_scroll_index_ >= 0) {
+            start = Clamp(film_strip_scroll_index_, 0, max_start);
+        } else if (current_index_ >= 0) {
+            start = Clamp(current_index_ - slots / 2, 0, max_start);
+        }
+
+        int notches = static_cast<int>(wheel_delta / WHEEL_DELTA);
+        if (notches == 0) {
+            notches = (wheel_delta > 0) ? 1 : -1;
+        }
+        const int next = Clamp(start - notches, 0, max_start);
+        film_strip_scroll_index_ = next;
+        if (next != start || start != Clamp(current_index_ - slots / 2, 0, max_start)) {
+            RequestRender(true);
+        }
         return;
     }
-    const D2D1_SIZE_F size = d2d_context_->GetSize();
+
+    if (current_image_.type == ImageType::None) {
+        return;
+    }
+
     const D2D1_RECT_F viewport = GetImageViewport(size.width, size.height);
     if (client_pt.x < viewport.left || client_pt.x > viewport.right || client_pt.y < viewport.top || client_pt.y > viewport.bottom) {
         return;
