@@ -31,6 +31,7 @@
 - Image viewport has left/right navigation buttons (previous/next) that are hidden by default and shown only when mouse hovers the corresponding left or right edge area.
 - When no image is loaded, a centered semi-transparent `打开图片...` button is shown in the viewport with centered label text; click to open the file picker.
 - When switching to a corrupted/un-decodable image, navigation does not get stuck: the bad file still becomes the current item, and the viewport shows a broken-image placeholder icon/message.
+- No bottom global error text overlay is rendered in the filmstrip area; error feedback is shown only via in-context UI elements (for example, the broken-image placeholder in the viewport).
 - Image drag/pan starts only when left click is on the currently visible image content (not just anywhere in viewport).
 - Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
 - Mouse wheel behavior is region-aware: cursor-anchored zoom in the image viewport, horizontal filmstrip scrolling when hovering the bottom filmstrip.

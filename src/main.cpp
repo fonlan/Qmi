@@ -887,7 +887,6 @@ private:
     void DrawBrokenImagePlaceholder(const D2D1_RECT_F& viewport);
     void DrawButtonGlyph(TitleButton button, const RECT& rect);
     void DrawCenteredText(const std::wstring& text, const D2D1_RECT_F& rect, IDWriteTextFormat* format);
-    void DrawMessageOverlay(const std::wstring& text);
 
     D2D1_RECT_F GetImageViewport(float width, float height) const;
     D2D1_RECT_F GetFilmStripRect(float width, float height) const;
@@ -2171,7 +2170,9 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
         image.type = ImageType::Broken;
         image.width = 0.0f;
         image.height = 0.0f;
-        current_error_ = L"\u65e0\u6cd5\u89e3\u7801\u6b64\u56fe\u7247\u3002";
+        // Broken images are represented directly in the viewport placeholder.
+        // Do not also show a bottom global error overlay behind the filmstrip.
+        current_error_.clear();
     } else {
         current_error_.clear();
     }
@@ -2892,14 +2893,6 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
     }
 }
 
-void QmiApp::DrawMessageOverlay(const std::wstring& text) {
-    if (!d2d_context_ || text.empty()) {
-        return;
-    }
-    D2D1_SIZE_F size = d2d_context_->GetSize();
-    DrawCenteredText(text, D2D1::RectF(20.0f, size.height - 36.0f, size.width - 20.0f, size.height - 8.0f), small_text_format_.Get());
-}
-
 bool QmiApp::PresentLayeredFrame() {
     if (!hwnd_ || !d3d_context_ || !frame_texture_ || !readback_texture_ || !layered_dc_ || !layered_bits_) {
         return false;
@@ -2965,10 +2958,6 @@ void QmiApp::Render() {
     const TitleButtons title_buttons = GetTitleButtons();
     DrawTopInfoBar(title_buttons);
     DrawTitleButtons(title_buttons);
-
-    if (!current_error_.empty()) {
-        DrawMessageOverlay(current_error_);
-    }
 
     HRESULT hr = d2d_context_->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {
