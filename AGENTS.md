@@ -27,7 +27,7 @@
 - Areas outside the image viewport are rendered as translucent overlays/panels with alpha `200/255` (~78%).
 - Main window uses `WS_EX_LAYERED` with per-pixel alpha composition via `UpdateLayeredWindow`.
 - In the image viewport, letterboxed area is rendered semi-transparent (non-zero alpha) to avoid mouse pass-through; no opaque underlay is drawn beneath image pixels, so transparent image content remains transparent (no black matte).
-- When no image is loaded, a centered semi-transparent `Open image...` button is shown in the viewport with centered label text; click to open the file picker.
+- When no image is loaded, a centered semi-transparent `打开图片...` button is shown in the viewport with centered label text; click to open the file picker.
 - Image drag/pan starts only when left click is on the currently visible image content (not just anywhere in viewport).
 - Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
 - Mouse wheel behavior is region-aware: cursor-anchored zoom in the image viewport, horizontal filmstrip scrolling when hovering the bottom filmstrip.
@@ -38,7 +38,7 @@
   - Thumbnail decode in filmstrip is progressive (per-frame budgeted), so first frame is prioritized over decoding all visible thumbnails at once.
   - Thumbnail cell background is semi-transparent neutral (non-black), so transparent pixels in thumbnails do not appear with a black matte.
   - SVG files are rasterized for filmstrip thumbnails (no placeholder-only SVG cells).
-- Right-click context menu: `Open image...`, `Settings...`, `Exit`.
+- Right-click context menu: `打开图片...`, `设置...`, `退出`.
 - Settings window uses a two-column layout:
   - Left navigation menu: `常规`, `关联`, `关于`
   - Left navigation has no header label and uses a compact width

@@ -2048,7 +2048,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     }
 
     if (FAILED(hr) || image.type == ImageType::None) {
-        current_error_ = L"Unable to decode this image.";
+        current_error_ = L"\u65e0\u6cd5\u89e3\u7801\u6b64\u56fe\u7247\u3002";
         return false;
     }
 
@@ -2075,7 +2075,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
 
 bool QmiApp::OpenImagePath(const fs::path& path, bool reset_view, bool defer_directory_scan) {
     if (path.empty() || !IsSupportedExtension(path)) {
-        current_error_ = L"Unsupported file format.";
+        current_error_ = L"\u4e0d\u652f\u6301\u7684\u6587\u4ef6\u683c\u5f0f\u3002";
         InvalidateRect(hwnd_, nullptr, FALSE);
         return false;
     }
@@ -2091,7 +2091,7 @@ bool QmiApp::OpenImagePath(const fs::path& path, bool reset_view, bool defer_dir
     }
 
     if (images_.empty()) {
-        current_error_ = L"No supported images in this folder.";
+        current_error_ = L"\u6b64\u6587\u4ef6\u5939\u4e2d\u6ca1\u6709\u652f\u6301\u7684\u56fe\u7247\u3002";
         InvalidateRect(hwnd_, nullptr, FALSE);
         return false;
     }
@@ -2443,7 +2443,7 @@ void QmiApp::DrawOpenButton(const D2D1_RECT_F& viewport) {
         d2d_context_->DrawRoundedRectangle(rounded, brush_overlay_.Get(), 1.0f);
     }
 
-    DrawCenteredText(L"Open image...", button_rect, text_format_.Get());
+    DrawCenteredText(L"\u6253\u5f00\u56fe\u7247...", button_rect, text_format_.Get());
 }
 
 void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
@@ -2459,7 +2459,7 @@ void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
         DrawOpenButton(viewport);
         const D2D1_RECT_F button_rect = GetOpenButtonRect(viewport);
         const float hint_top = std::min(viewport.bottom - 38.0f, button_rect.bottom + 12.0f);
-        DrawCenteredText(L"Or drag and drop an image file.", D2D1::RectF(viewport.left + 20.0f, hint_top, viewport.right - 20.0f, hint_top + 26.0f), small_text_format_.Get());
+        DrawCenteredText(L"\u6216\u62d6\u653e\u4e00\u4e2a\u56fe\u7247\u6587\u4ef6\u3002", D2D1::RectF(viewport.left + 20.0f, hint_top, viewport.right - 20.0f, hint_top + 26.0f), small_text_format_.Get());
         return;
     }
 
@@ -2552,7 +2552,7 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
             d2d_context_->DrawBitmap(thumb.bitmap.Get(), dst, 1.0f, D2D1_INTERPOLATION_MODE_LINEAR);
         } else {
             const std::wstring ext = ToLower(images_[i].extension().wstring());
-            std::wstring label = ext.empty() ? L"IMG" : ext.substr(1);
+            std::wstring label = ext.empty() ? L"\u56fe\u7247" : ext.substr(1);
             DrawCenteredText(label, cell, small_text_format_.Get());
         }
 
@@ -2664,7 +2664,7 @@ void QmiApp::OpenFileDialog() {
     ofn.hwndOwner = hwnd_;
     ofn.lpstrFile = file_path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = L"Image Files\0*.jpg;*.jpeg;*.png;*.bmp;*.ico;*.webp;*.gif;*.svg\0All Files\0*.*\0";
+    ofn.lpstrFilter = L"\u56fe\u7247\u6587\u4ef6\0*.jpg;*.jpeg;*.png;*.bmp;*.ico;*.webp;*.gif;*.svg\0\u6240\u6709\u6587\u4ef6\0*.*\0";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
     ofn.lpstrDefExt = L"jpg";
 
@@ -2704,10 +2704,10 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
         return;
     }
 
-    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"Open image...");
-    AppendMenuW(menu, MF_STRING, kMenuSettings, L"Settings...");
+    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00\u56fe\u7247...");
+    AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u8bbe\u7f6e...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
+    AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa");
 
     SetForegroundWindow(hwnd_);
     const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen_pt.x, screen_pt.y, 0, hwnd_, nullptr);
@@ -3554,7 +3554,7 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE, PWSTR, int show_cmd) {
 
     QmiApp app;
     if (!app.Initialize(hinstance, show_cmd, startup_path)) {
-        MessageBoxW(nullptr, L"Qmi initialization failed.", L"Qmi", MB_ICONERROR | MB_OK);
+        MessageBoxW(nullptr, L"Qmi \u521d\u59cb\u5316\u5931\u8d25\u3002", L"Qmi", MB_ICONERROR | MB_OK);
         return 1;
     }
     return app.Run();
