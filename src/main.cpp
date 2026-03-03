@@ -994,6 +994,7 @@ private:
 
     D2D1_RECT_F GetImageViewport(float width, float height) const;
     D2D1_RECT_F GetFilmStripRect(float width, float height) const;
+    D2D1_RECT_F GetImageFitViewport(const D2D1_RECT_F& viewport) const;
     float GetBaseImageScale(const D2D1_RECT_F& viewport) const;
     D2D1_RECT_F GetImageDestinationRect(const D2D1_RECT_F& viewport) const;
     D2D1_RECT_F GetOpenButtonRect(const D2D1_RECT_F& viewport) const;
@@ -2499,15 +2500,22 @@ D2D1_RECT_F QmiApp::GetImageViewport(float width, float height) const {
     return D2D1::RectF(left, top, right, bottom);
 }
 
+D2D1_RECT_F QmiApp::GetImageFitViewport(const D2D1_RECT_F& viewport) const {
+    const float min_fit_height = 40.0f;
+    const float fit_top = std::min(viewport.top + static_cast<float>(kTitleButtonHeight), viewport.bottom - min_fit_height);
+    return D2D1::RectF(viewport.left, fit_top, viewport.right, viewport.bottom);
+}
+
 float QmiApp::GetBaseImageScale(const D2D1_RECT_F& viewport) const {
     if (!IsRenderableImageType(current_image_.type)) {
         return 1.0f;
     }
 
+    const D2D1_RECT_F fit_viewport = GetImageFitViewport(viewport);
     const float img_w = std::max(1.0f, current_image_.width);
     const float img_h = std::max(1.0f, current_image_.height);
-    const float view_w = std::max(1.0f, viewport.right - viewport.left);
-    const float view_h = std::max(1.0f, viewport.bottom - viewport.top);
+    const float view_w = std::max(1.0f, fit_viewport.right - fit_viewport.left);
+    const float view_h = std::max(1.0f, fit_viewport.bottom - fit_viewport.top);
     const float fit = std::min(view_w / img_w, view_h / img_h);
     return std::min(1.0f, fit);
 }
@@ -2522,9 +2530,10 @@ D2D1_RECT_F QmiApp::GetImageDestinationRect(const D2D1_RECT_F& viewport) const {
     const float scale = std::max(0.02f, GetBaseImageScale(viewport) * zoom_);
     const float dest_w = img_w * scale;
     const float dest_h = img_h * scale;
+    const D2D1_RECT_F fit_viewport = GetImageFitViewport(viewport);
 
-    const float cx = (viewport.left + viewport.right) * 0.5f + pan_x_;
-    const float cy = (viewport.top + viewport.bottom) * 0.5f + pan_y_;
+    const float cx = (fit_viewport.left + fit_viewport.right) * 0.5f + pan_x_;
+    const float cy = (fit_viewport.top + fit_viewport.bottom) * 0.5f + pan_y_;
     return D2D1::RectF(cx - dest_w * 0.5f, cy - dest_h * 0.5f, cx + dest_w * 0.5f, cy + dest_h * 0.5f);
 }
 
@@ -3672,9 +3681,10 @@ void QmiApp::HandleMouseWheel(short wheel_delta, POINT screen_pt) {
     const float img_h = std::max(1.0f, current_image_.height);
     const float base_scale = GetBaseImageScale(viewport);
     const float old_scale = std::max(0.02f, base_scale * zoom_);
+    const D2D1_RECT_F fit_viewport = GetImageFitViewport(viewport);
 
-    const float center_x = (viewport.left + viewport.right) * 0.5f;
-    const float center_y = (viewport.top + viewport.bottom) * 0.5f;
+    const float center_x = (fit_viewport.left + fit_viewport.right) * 0.5f;
+    const float center_y = (fit_viewport.top + fit_viewport.bottom) * 0.5f;
     const float image_left_before = center_x - img_w * old_scale * 0.5f + pan_x_;
     const float image_top_before = center_y - img_h * old_scale * 0.5f + pan_y_;
     const float image_space_x = (client_pt.x - image_left_before) / old_scale;
