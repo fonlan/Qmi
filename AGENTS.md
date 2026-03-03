@@ -27,6 +27,7 @@
 - Areas outside the image viewport are rendered as translucent overlays/panels with alpha `200/255` (~78%).
 - Main window uses `WS_EX_LAYERED` with per-pixel alpha composition via `UpdateLayeredWindow`.
 - In the image viewport, letterboxed area is rendered semi-transparent (non-zero alpha) to avoid mouse pass-through; no opaque underlay is drawn beneath image pixels, so transparent image content remains transparent (no black matte).
+- Image viewport has left/right navigation buttons (previous/next) that are hidden by default and shown only when mouse hovers the corresponding left or right edge area.
 - When no image is loaded, a centered semi-transparent `打开图片...` button is shown in the viewport with centered label text; click to open the file picker.
 - Image drag/pan starts only when left click is on the currently visible image content (not just anywhere in viewport).
 - Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
@@ -112,11 +113,13 @@ Build output executable:
   - `GetImageDestinationRect`
   - `GetOpenButtonRect`
   - `GetTitleButtons`
+  - `GetEdgeNavButtons`
 - Rendering:
   - `Render`
   - `CreateWindowSizeResources` (offscreen texture + readback surface setup; bitmap reload only when D2D context is recreated)
   - `PresentLayeredFrame` (copy GPU frame to DIB then `UpdateLayeredWindow`)
   - `DrawImageRegion`
+  - `DrawEdgeNavButtons`
   - `DrawOpenButton`
   - `DrawFilmStrip` (progressive thumbnail loading with per-frame decode budget)
   - `DrawTitleButtons`
@@ -125,6 +128,7 @@ Build output executable:
   - Repaint throttling: `RequestRender` + `WM_TIMER(kRenderTimerId)`
   - GIF playback tick: `WM_TIMER(kAnimationTimerId)` + `ScheduleNextAnimationFrame`
   - Open button hit-test: `HitTestOpenButton`
+  - Edge navigation hit-test: `HitTestEdgeNavTrigger`, `HitTestEdgeNavButton`
   - Drag hit-test: `IsPointOverVisibleImage`
   - Window/event dispatch: `HandleMessage`
 - File associations (settings page):

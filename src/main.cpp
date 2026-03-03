@@ -548,10 +548,23 @@ enum class TitleButton {
     Close
 };
 
+enum class EdgeNavButton {
+    None,
+    Previous,
+    Next
+};
+
 struct TitleButtons {
     RECT min_rect{};
     RECT max_rect{};
     RECT close_rect{};
+};
+
+struct EdgeNavButtons {
+    D2D1_RECT_F prev_rect{};
+    D2D1_RECT_F next_rect{};
+    D2D1_RECT_F left_trigger_rect{};
+    D2D1_RECT_F right_trigger_rect{};
 };
 
 struct Thumbnail {
@@ -819,6 +832,7 @@ private:
     void DrawImageRegion(const D2D1_RECT_F& viewport);
     void DrawFilmStrip(const D2D1_RECT_F& strip_rect);
     void DrawTitleButtons(const TitleButtons& buttons);
+    void DrawEdgeNavButtons(const D2D1_RECT_F& viewport);
     void DrawOpenButton(const D2D1_RECT_F& viewport);
     void DrawButtonGlyph(TitleButton button, const RECT& rect);
     void DrawCenteredText(const std::wstring& text, const D2D1_RECT_F& rect, IDWriteTextFormat* format);
@@ -830,7 +844,10 @@ private:
     D2D1_RECT_F GetImageDestinationRect(const D2D1_RECT_F& viewport) const;
     D2D1_RECT_F GetOpenButtonRect(const D2D1_RECT_F& viewport) const;
     TitleButtons GetTitleButtons() const;
+    EdgeNavButtons GetEdgeNavButtons(const D2D1_RECT_F& viewport) const;
     TitleButton HitTestTitleButton(POINT client_pt) const;
+    EdgeNavButton HitTestEdgeNavButton(POINT client_pt) const;
+    EdgeNavButton HitTestEdgeNavTrigger(POINT client_pt) const;
     bool HitTestOpenButton(POINT client_pt) const;
     bool IsPointOverVisibleImage(POINT client_pt, const D2D1_RECT_F& viewport) const;
     int HitTestThumbnail(POINT client_pt) const;
@@ -901,6 +918,9 @@ private:
 
     TitleButton hover_button_ = TitleButton::None;
     TitleButton pressed_button_ = TitleButton::None;
+    EdgeNavButton hover_edge_nav_button_ = EdgeNavButton::None;
+    EdgeNavButton visible_edge_nav_button_ = EdgeNavButton::None;
+    EdgeNavButton pressed_edge_nav_button_ = EdgeNavButton::None;
     bool hover_open_button_ = false;
     bool pressed_open_button_ = false;
     bool render_timer_armed_ = false;
@@ -2060,6 +2080,9 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     current_error_.clear();
     hover_open_button_ = false;
     pressed_open_button_ = false;
+    hover_edge_nav_button_ = EdgeNavButton::None;
+    visible_edge_nav_button_ = EdgeNavButton::None;
+    pressed_edge_nav_button_ = EdgeNavButton::None;
 
     if (reset_view && fit_on_switch_) {
         ResetView();
@@ -2227,6 +2250,26 @@ TitleButtons QmiApp::GetTitleButtons() const {
     return b;
 }
 
+EdgeNavButtons QmiApp::GetEdgeNavButtons(const D2D1_RECT_F& viewport) const {
+    EdgeNavButtons buttons{};
+    const float view_w = std::max(1.0f, viewport.right - viewport.left);
+    const float view_h = std::max(1.0f, viewport.bottom - viewport.top);
+    const float button_size = Clamp(std::min(view_w, view_h) * 0.105f, 46.0f, 64.0f);
+    const float side_inset = 14.0f;
+    const float trigger_width = std::max(76.0f, button_size + 18.0f);
+    const float center_y = (viewport.top + viewport.bottom) * 0.5f;
+
+    const float prev_left = viewport.left + side_inset;
+    const float next_right = viewport.right - side_inset;
+    buttons.prev_rect = D2D1::RectF(prev_left, center_y - button_size * 0.5f, prev_left + button_size, center_y + button_size * 0.5f);
+    buttons.next_rect =
+        D2D1::RectF(next_right - button_size, center_y - button_size * 0.5f, next_right, center_y + button_size * 0.5f);
+
+    buttons.left_trigger_rect = D2D1::RectF(viewport.left, viewport.top, viewport.left + trigger_width, viewport.bottom);
+    buttons.right_trigger_rect = D2D1::RectF(viewport.right - trigger_width, viewport.top, viewport.right, viewport.bottom);
+    return buttons;
+}
+
 TitleButton QmiApp::HitTestTitleButton(POINT client_pt) const {
     if (!hwnd_) {
         return TitleButton::None;
@@ -2244,6 +2287,52 @@ TitleButton QmiApp::HitTestTitleButton(POINT client_pt) const {
         return TitleButton::Minimize;
     }
     return TitleButton::None;
+}
+
+EdgeNavButton QmiApp::HitTestEdgeNavButton(POINT client_pt) const {
+    if (!hwnd_ || current_image_.type == ImageType::None || images_.size() <= 1) {
+        return EdgeNavButton::None;
+    }
+
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    const D2D1_RECT_F viewport = GetImageViewport(static_cast<float>(rc.right - rc.left), static_cast<float>(rc.bottom - rc.top));
+    const EdgeNavButtons buttons = GetEdgeNavButtons(viewport);
+    const float x = static_cast<float>(client_pt.x);
+    const float y = static_cast<float>(client_pt.y);
+    if (x >= buttons.prev_rect.left && x <= buttons.prev_rect.right && y >= buttons.prev_rect.top && y <= buttons.prev_rect.bottom) {
+        return EdgeNavButton::Previous;
+    }
+    if (x >= buttons.next_rect.left && x <= buttons.next_rect.right && y >= buttons.next_rect.top && y <= buttons.next_rect.bottom) {
+        return EdgeNavButton::Next;
+    }
+    return EdgeNavButton::None;
+}
+
+EdgeNavButton QmiApp::HitTestEdgeNavTrigger(POINT client_pt) const {
+    if (!hwnd_ || current_image_.type == ImageType::None || images_.size() <= 1) {
+        return EdgeNavButton::None;
+    }
+
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    const D2D1_RECT_F viewport = GetImageViewport(static_cast<float>(rc.right - rc.left), static_cast<float>(rc.bottom - rc.top));
+    const float x = static_cast<float>(client_pt.x);
+    const float y = static_cast<float>(client_pt.y);
+    if (x < viewport.left || x > viewport.right || y < viewport.top || y > viewport.bottom) {
+        return EdgeNavButton::None;
+    }
+
+    const EdgeNavButtons buttons = GetEdgeNavButtons(viewport);
+    if (x >= buttons.left_trigger_rect.left && x <= buttons.left_trigger_rect.right && y >= buttons.left_trigger_rect.top &&
+        y <= buttons.left_trigger_rect.bottom) {
+        return EdgeNavButton::Previous;
+    }
+    if (x >= buttons.right_trigger_rect.left && x <= buttons.right_trigger_rect.right && y >= buttons.right_trigger_rect.top &&
+        y <= buttons.right_trigger_rect.bottom) {
+        return EdgeNavButton::Next;
+    }
+    return EdgeNavButton::None;
 }
 
 bool QmiApp::HitTestOpenButton(POINT client_pt) const {
@@ -2419,6 +2508,49 @@ void QmiApp::DrawTitleButtons(const TitleButtons& buttons) {
     draw_button(TitleButton::Minimize, buttons.min_rect);
     draw_button(TitleButton::Maximize, buttons.max_rect);
     draw_button(TitleButton::Close, buttons.close_rect);
+}
+
+void QmiApp::DrawEdgeNavButtons(const D2D1_RECT_F& viewport) {
+    if (!d2d_context_ || !brush_panel_ || !brush_overlay_ || !brush_text_ || current_image_.type == ImageType::None || images_.size() <= 1) {
+        return;
+    }
+
+    EdgeNavButton button = visible_edge_nav_button_;
+    if (pressed_edge_nav_button_ != EdgeNavButton::None) {
+        button = pressed_edge_nav_button_;
+    }
+    if (button == EdgeNavButton::None) {
+        return;
+    }
+
+    const EdgeNavButtons buttons = GetEdgeNavButtons(viewport);
+    const D2D1_RECT_F rect = (button == EdgeNavButton::Previous) ? buttons.prev_rect : buttons.next_rect;
+    const float cx = (rect.left + rect.right) * 0.5f;
+    const float cy = (rect.top + rect.bottom) * 0.5f;
+    const float radius = (rect.right - rect.left) * 0.5f;
+    const D2D1_ELLIPSE circle = D2D1::Ellipse(D2D1::Point2F(cx, cy), radius, radius);
+
+    d2d_context_->FillEllipse(circle, brush_panel_.Get());
+    if (hover_edge_nav_button_ == button && brush_hover_) {
+        d2d_context_->FillEllipse(circle, brush_hover_.Get());
+    }
+
+    if (pressed_edge_nav_button_ == button && brush_accent_) {
+        d2d_context_->DrawEllipse(circle, brush_accent_.Get(), 2.0f);
+    } else {
+        d2d_context_->DrawEllipse(circle, brush_overlay_.Get(), 1.0f);
+    }
+
+    const float chevron_half = radius * 0.34f;
+    const float notch = radius * 0.24f;
+    const float stroke = 2.0f;
+    if (button == EdgeNavButton::Previous) {
+        d2d_context_->DrawLine(D2D1::Point2F(cx + notch, cy - chevron_half), D2D1::Point2F(cx - notch, cy), brush_text_.Get(), stroke);
+        d2d_context_->DrawLine(D2D1::Point2F(cx - notch, cy), D2D1::Point2F(cx + notch, cy + chevron_half), brush_text_.Get(), stroke);
+    } else {
+        d2d_context_->DrawLine(D2D1::Point2F(cx - notch, cy - chevron_half), D2D1::Point2F(cx + notch, cy), brush_text_.Get(), stroke);
+        d2d_context_->DrawLine(D2D1::Point2F(cx + notch, cy), D2D1::Point2F(cx - notch, cy + chevron_half), brush_text_.Get(), stroke);
+    }
 }
 
 void QmiApp::DrawOpenButton(const D2D1_RECT_F& viewport) {
@@ -2628,6 +2760,7 @@ void QmiApp::Render() {
     d2d_context_->Clear(D2D1::ColorF(0x000000, 0.0f));
 
     DrawImageRegion(viewport);
+    DrawEdgeNavButtons(viewport);
 
     if (brush_overlay_) {
         d2d_context_->FillRectangle(D2D1::RectF(0.0f, 0.0f, size.width, viewport.top), brush_overlay_.Get());
@@ -2755,9 +2888,14 @@ void QmiApp::RequestRender(bool interactive) {
 void QmiApp::UpdateHoverState(POINT client_pt) {
     const TitleButton hovered = HitTestTitleButton(client_pt);
     const bool hovered_open_button = HitTestOpenButton(client_pt);
-    if (hovered != hover_button_ || hovered_open_button != hover_open_button_) {
+    const EdgeNavButton hovered_nav_button = HitTestEdgeNavButton(client_pt);
+    const EdgeNavButton visible_nav_button = HitTestEdgeNavTrigger(client_pt);
+    if (hovered != hover_button_ || hovered_open_button != hover_open_button_ || hovered_nav_button != hover_edge_nav_button_ ||
+        visible_nav_button != visible_edge_nav_button_) {
         hover_button_ = hovered;
         hover_open_button_ = hovered_open_button;
+        hover_edge_nav_button_ = hovered_nav_button;
+        visible_edge_nav_button_ = visible_nav_button;
         RequestRender(true);
     }
 }
@@ -2958,6 +3096,8 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_MOUSELEAVE:
             hover_button_ = TitleButton::None;
             hover_open_button_ = false;
+            hover_edge_nav_button_ = EdgeNavButton::None;
+            visible_edge_nav_button_ = EdgeNavButton::None;
             RequestRender();
             return 0;
 
@@ -2975,6 +3115,14 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
 
             if (HitTestOpenButton(pt)) {
                 pressed_open_button_ = true;
+                SetCapture(hwnd_);
+                RequestRender();
+                return 0;
+            }
+
+            const EdgeNavButton nav_button = HitTestEdgeNavButton(pt);
+            if (nav_button != EdgeNavButton::None) {
+                pressed_edge_nav_button_ = nav_button;
                 SetCapture(hwnd_);
                 RequestRender();
                 return 0;
@@ -3034,6 +3182,18 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 RequestRender();
                 if (released_on_button) {
                     OpenFileDialog();
+                }
+                return 0;
+            }
+
+            if (pressed_edge_nav_button_ != EdgeNavButton::None) {
+                const EdgeNavButton released_on = HitTestEdgeNavButton(pt);
+                const EdgeNavButton pressed = pressed_edge_nav_button_;
+                pressed_edge_nav_button_ = EdgeNavButton::None;
+                ReleaseCapture();
+                RequestRender();
+                if (released_on == pressed) {
+                    MoveSelection(pressed == EdgeNavButton::Previous ? -1 : 1);
                 }
                 return 0;
             }
