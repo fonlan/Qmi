@@ -57,6 +57,8 @@
 namespace fs = std::filesystem;
 using Microsoft::WRL::ComPtr;
 
+class QmiApp;
+
 namespace {
 constexpr wchar_t kMainClassName[] = L"QmiMainWindowClass";
 constexpr wchar_t kSettingsClassName[] = L"QmiSettingsWindowClass";
@@ -69,6 +71,7 @@ constexpr UINT_PTR kStartupScanTimerId = 2;
 
 constexpr int kCtrlFitOnSwitch = 2001;
 constexpr int kCtrlSmoothSampling = 2002;
+constexpr int kCtrlSettingsNav = 2100;
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -179,6 +182,100 @@ struct LoadedImage {
     float width = 0.0f;
     float height = 0.0f;
 };
+
+enum class SettingsPage {
+    General = 0,
+    Associations = 1,
+    About = 2
+};
+
+struct SettingsWindowState {
+    QmiApp* app = nullptr;
+    int active_page = static_cast<int>(SettingsPage::General);
+
+    HWND nav_list = nullptr;
+
+    HWND general_title = nullptr;
+    HWND fit_checkbox = nullptr;
+    HWND smooth_checkbox = nullptr;
+
+    HWND associations_title = nullptr;
+    HWND associations_text = nullptr;
+
+    HWND about_title = nullptr;
+    HWND about_text = nullptr;
+
+    HFONT title_font = nullptr;
+    HFONT nav_font = nullptr;
+    HFONT body_font = nullptr;
+};
+
+void SetControlFont(HWND hwnd, HFONT font) {
+    if (!hwnd || !font) {
+        return;
+    }
+    SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+}
+
+void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
+    if (!state) {
+        return;
+    }
+    state->active_page =
+        Clamp(page_index, static_cast<int>(SettingsPage::General), static_cast<int>(SettingsPage::About));
+    const bool show_general = state->active_page == static_cast<int>(SettingsPage::General);
+    const bool show_associations = state->active_page == static_cast<int>(SettingsPage::Associations);
+    const bool show_about = state->active_page == static_cast<int>(SettingsPage::About);
+
+    ShowWindow(state->general_title, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->fit_checkbox, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->smooth_checkbox, show_general ? SW_SHOW : SW_HIDE);
+
+    ShowWindow(state->associations_title, show_associations ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->associations_text, show_associations ? SW_SHOW : SW_HIDE);
+
+    ShowWindow(state->about_title, show_about ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->about_text, show_about ? SW_SHOW : SW_HIDE);
+    if (state->nav_list) {
+        InvalidateRect(state->nav_list, nullptr, FALSE);
+    }
+}
+
+void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
+    if (!hwnd || !state) {
+        return;
+    }
+
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    const int client_width = std::max(1, static_cast<int>(rc.right - rc.left));
+    const int client_height = std::max(1, static_cast<int>(rc.bottom - rc.top));
+
+    constexpr int kOuterPadding = 20;
+    constexpr int kNavWidth = 130;
+    constexpr int kColumnsGap = 22;
+    constexpr int kPanelPaddingX = 16;
+
+    const int nav_height = std::max(120, client_height - (kOuterPadding * 2));
+    MoveWindow(state->nav_list, kOuterPadding, kOuterPadding, kNavWidth, nav_height, TRUE);
+
+    const int panel_x = kOuterPadding + kNavWidth + kColumnsGap;
+    const int panel_width = std::max(160, client_width - panel_x - kOuterPadding);
+    const int panel_y = kOuterPadding;
+    const int panel_height = std::max(120, client_height - (kOuterPadding * 2));
+
+    const int text_width = std::max(80, panel_width - kPanelPaddingX * 2);
+    MoveWindow(state->general_title, panel_x + kPanelPaddingX, panel_y + 8, text_width, 34, TRUE);
+    MoveWindow(state->fit_checkbox, panel_x + kPanelPaddingX, panel_y + 56, text_width, 28, TRUE);
+    MoveWindow(state->smooth_checkbox, panel_x + kPanelPaddingX, panel_y + 92, text_width, 28, TRUE);
+
+    MoveWindow(state->associations_title, panel_x + kPanelPaddingX, panel_y + 8, text_width, 34, TRUE);
+    MoveWindow(state->associations_text, panel_x + kPanelPaddingX, panel_y + 56, text_width, std::max(40, panel_height - 72),
+               TRUE);
+
+    MoveWindow(state->about_title, panel_x + kPanelPaddingX, panel_y + 8, text_width, 34, TRUE);
+    MoveWindow(state->about_text, panel_x + kPanelPaddingX, panel_y + 56, text_width, std::max(40, panel_height - 72), TRUE);
+}
 }  // namespace
 
 class QmiApp {
@@ -1772,12 +1869,12 @@ void QmiApp::OpenSettingsWindow() {
 
     settings_hwnd_ = CreateWindowExW(WS_EX_APPWINDOW,
                                      kSettingsClassName,
-                                     L"Qmi Settings",
+                                     L"Qmi \u8bbe\u7f6e",
                                      WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
                                      CW_USEDEFAULT,
                                      CW_USEDEFAULT,
-                                     380,
-                                     200,
+                                     700,
+                                     460,
                                      hwnd_,
                                      nullptr,
                                      hinstance_,
@@ -2259,75 +2356,275 @@ LRESULT CALLBACK QmiApp::MainWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM 
 LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (msg == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
-        auto* app = reinterpret_cast<QmiApp*>(create->lpCreateParams);
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(app));
+        auto* state = new SettingsWindowState();
+        state->app = reinterpret_cast<QmiApp*>(create->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
     }
 
-    auto* app = reinterpret_cast<QmiApp*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    auto* state = reinterpret_cast<SettingsWindowState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    auto* app = state ? state->app : nullptr;
     switch (msg) {
         case WM_CREATE: {
-            CreateWindowExW(0,
-                            L"STATIC",
-                            L"Switch and Zoom",
-                            WS_CHILD | WS_VISIBLE,
-                            18,
-                            16,
-                            240,
-                            20,
-                            hwnd,
-                            nullptr,
-                            nullptr,
-                            nullptr);
+            if (!state) {
+                return -1;
+            }
 
-            HWND fit = CreateWindowExW(0,
-                                       L"BUTTON",
-                                       L"Fit to window when switching image",
-                                       WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                       18,
-                                       46,
-                                       280,
-                                       24,
-                                       hwnd,
-                                       reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlFitOnSwitch)),
-                                       nullptr,
-                                       nullptr);
-            SendMessageW(fit, BM_SETCHECK, app && app->fit_on_switch_ ? BST_CHECKED : BST_UNCHECKED, 0);
+            state->title_font = CreateFontW(-24, 0, 0, 0, 600, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+            state->nav_font = CreateFontW(-18, 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                          OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                                          L"Segoe UI");
+            state->body_font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                                           L"Segoe UI");
 
-            HWND smooth = CreateWindowExW(0,
-                                          L"BUTTON",
-                                          L"Use smooth interpolation while zooming",
-                                          WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-                                          18,
-                                          78,
-                                          240,
-                                          24,
-                                          hwnd,
-                                          reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlSmoothSampling)),
-                                          nullptr,
-                                          nullptr);
-            SendMessageW(smooth, BM_SETCHECK, app && app->smooth_sampling_ ? BST_CHECKED : BST_UNCHECKED, 0);
+            state->nav_list = CreateWindowExW(0,
+                                              L"LISTBOX",
+                                              nullptr,
+                                              WS_CHILD | WS_VISIBLE | WS_TABSTOP | LBS_NOTIFY | LBS_HASSTRINGS |
+                                                  LBS_OWNERDRAWFIXED | LBS_NOINTEGRALHEIGHT,
+                                              0,
+                                              0,
+                                              0,
+                                              0,
+                                              hwnd,
+                                              reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlSettingsNav)),
+                                              nullptr,
+                                              nullptr);
+            if (state->nav_list) {
+                SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5e38\u89c4"));
+                SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5173\u8054"));
+                SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5173\u4e8e"));
+                SendMessageW(state->nav_list, LB_SETCURSEL, static_cast<WPARAM>(SettingsPage::General), 0);
+            }
 
+            state->general_title = CreateWindowExW(0,
+                                                   L"STATIC",
+                                                   L"\u5e38\u89c4",
+                                                   WS_CHILD | WS_VISIBLE,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   hwnd,
+                                                   nullptr,
+                                                   nullptr,
+                                                   nullptr);
+            state->fit_checkbox = CreateWindowExW(0,
+                                                  L"BUTTON",
+                                                  L"\u5207\u6362\u56fe\u7247\u65f6\u81ea\u52a8\u9002\u914d\u7a97\u53e3",
+                                                  WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_FLAT,
+                                                  0,
+                                                  0,
+                                                  0,
+                                                  0,
+                                                  hwnd,
+                                                  reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlFitOnSwitch)),
+                                                  nullptr,
+                                                  nullptr);
+            state->smooth_checkbox = CreateWindowExW(0,
+                                                     L"BUTTON",
+                                                     L"\u7f29\u653e\u65f6\u4f7f\u7528\u5e73\u6ed1\u63d2\u503c",
+                                                     WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_FLAT,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     0,
+                                                     hwnd,
+                                                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlSmoothSampling)),
+                                                     nullptr,
+                                                     nullptr);
+            SendMessageW(state->fit_checkbox, BM_SETCHECK, app && app->fit_on_switch_ ? BST_CHECKED : BST_UNCHECKED, 0);
+            SendMessageW(state->smooth_checkbox,
+                         BM_SETCHECK,
+                         app && app->smooth_sampling_ ? BST_CHECKED : BST_UNCHECKED,
+                         0);
+
+            state->associations_title = CreateWindowExW(0,
+                                                        L"STATIC",
+                                                        L"\u5173\u8054",
+                                                        WS_CHILD | WS_VISIBLE,
+                                                        0,
+                                                        0,
+                                                        0,
+                                                        0,
+                                                        hwnd,
+                                                        nullptr,
+                                                        nullptr,
+                                                        nullptr);
+            state->associations_text = CreateWindowExW(
+                0,
+                L"STATIC",
+                L"\u8fd9\u91cc\u7528\u4e8e\u7ba1\u7406\u56fe\u7247\u6587\u4ef6\u4e0e Qmi \u7684\u5173\u8054\u65b9\u5f0f\u3002\r\n\r\n\u5f53\u524d\u7248\u672c\u6682\u672a\u63d0\u4f9b\u53ef\u914d\u7f6e\u9879\u3002",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                nullptr,
+                nullptr,
+                nullptr);
+
+            state->about_title = CreateWindowExW(0,
+                                                 L"STATIC",
+                                                 L"\u5173\u4e8e",
+                                                 WS_CHILD | WS_VISIBLE,
+                                                 0,
+                                                 0,
+                                                 0,
+                                                 0,
+                                                 hwnd,
+                                                 nullptr,
+                                                 nullptr,
+                                                 nullptr);
+            state->about_text = CreateWindowExW(0,
+                                                L"STATIC",
+                                                L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / webp / svg",
+                                                WS_CHILD | WS_VISIBLE,
+                                                0,
+                                                0,
+                                                0,
+                                                0,
+                                                hwnd,
+                                                nullptr,
+                                                nullptr,
+                                                nullptr);
+
+            SetControlFont(state->nav_list, state->nav_font);
+            SetControlFont(state->general_title, state->title_font);
+            SetControlFont(state->fit_checkbox, state->body_font);
+            SetControlFont(state->smooth_checkbox, state->body_font);
+            SetControlFont(state->associations_title, state->title_font);
+            SetControlFont(state->associations_text, state->body_font);
+            SetControlFont(state->about_title, state->title_font);
+            SetControlFont(state->about_text, state->body_font);
+
+            SetActiveSettingsPage(state, static_cast<int>(SettingsPage::General));
+            LayoutSettingsWindow(hwnd, state);
             return 0;
         }
+        case WM_GETMINMAXINFO:
+            if (auto* minmax = reinterpret_cast<MINMAXINFO*>(lparam)) {
+                minmax->ptMinTrackSize.x = 520;
+                minmax->ptMinTrackSize.y = 320;
+            }
+            return 0;
+        case WM_SIZE:
+            LayoutSettingsWindow(hwnd, state);
+            return 0;
+        case WM_MEASUREITEM:
+            if (state) {
+                auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
+                if (measure && measure->CtlID == kCtrlSettingsNav) {
+                    measure->itemHeight = 40;
+                    return TRUE;
+                }
+            }
+            break;
+        case WM_DRAWITEM:
+            if (state) {
+                auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
+                if (draw && draw->CtlID == kCtrlSettingsNav && draw->CtlType == ODT_LISTBOX) {
+                    FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(COLOR_WINDOW));
+                    if (draw->itemID == static_cast<UINT>(-1)) {
+                        return TRUE;
+                    }
+
+                    RECT item_rect = draw->rcItem;
+                    InflateRect(&item_rect, -6, -4);
+                    const bool active = static_cast<int>(draw->itemID) == state->active_page;
+                    if (active) {
+                        HPEN accent_pen = CreatePen(PS_SOLID, 2, RGB(37, 74, 160));
+                        HPEN old_pen = static_cast<HPEN>(SelectObject(draw->hDC, accent_pen));
+                        MoveToEx(draw->hDC, item_rect.left + 4, item_rect.top + 6, nullptr);
+                        LineTo(draw->hDC, item_rect.left + 4, item_rect.bottom - 6);
+                        SelectObject(draw->hDC, old_pen);
+                        DeleteObject(accent_pen);
+                    }
+
+                    wchar_t text[64] = {};
+                    SendMessageW(state->nav_list, LB_GETTEXT, draw->itemID, reinterpret_cast<LPARAM>(text));
+                    SetBkMode(draw->hDC, TRANSPARENT);
+                    SetTextColor(draw->hDC, active ? RGB(37, 74, 160) : RGB(75, 82, 97));
+                    DrawTextW(draw->hDC, text, -1, &item_rect, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+                    return TRUE;
+                }
+            }
+            break;
         case WM_COMMAND:
+            if (!state) {
+                return 0;
+            }
+            if (LOWORD(wparam) == kCtrlSettingsNav && HIWORD(wparam) == LBN_SELCHANGE) {
+                const LRESULT selection = SendMessageW(state->nav_list, LB_GETCURSEL, 0, 0);
+                if (selection != LB_ERR) {
+                    SetActiveSettingsPage(state, static_cast<int>(selection));
+                }
+                return 0;
+            }
             if (app && HIWORD(wparam) == BN_CLICKED) {
-                if (LOWORD(wparam) == kCtrlFitOnSwitch) {
+                if (LOWORD(wparam) == kCtrlFitOnSwitch && lparam) {
                     app->fit_on_switch_ = SendMessageW(reinterpret_cast<HWND>(lparam), BM_GETCHECK, 0, 0) == BST_CHECKED;
-                } else if (LOWORD(wparam) == kCtrlSmoothSampling) {
+                } else if (LOWORD(wparam) == kCtrlSmoothSampling && lparam) {
                     app->smooth_sampling_ =
                         SendMessageW(reinterpret_cast<HWND>(lparam), BM_GETCHECK, 0, 0) == BST_CHECKED;
                 }
                 InvalidateRect(app->hwnd_, nullptr, FALSE);
             }
             return 0;
+        case WM_CTLCOLORLISTBOX:
+            if (state && reinterpret_cast<HWND>(lparam) == state->nav_list) {
+                SetTextColor(reinterpret_cast<HDC>(wparam), RGB(43, 48, 59));
+                SetBkMode(reinterpret_cast<HDC>(wparam), TRANSPARENT);
+                return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+            }
+            break;
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN:
+            if (state) {
+                const HWND ctrl = reinterpret_cast<HWND>(lparam);
+                HDC hdc = reinterpret_cast<HDC>(wparam);
+                const bool is_panel_ctrl = ctrl == state->general_title || ctrl == state->fit_checkbox ||
+                                           ctrl == state->smooth_checkbox || ctrl == state->associations_title ||
+                                           ctrl == state->associations_text || ctrl == state->about_title ||
+                                           ctrl == state->about_text;
+                if (is_panel_ctrl) {
+                    const bool title_ctrl = ctrl == state->general_title || ctrl == state->associations_title ||
+                                            ctrl == state->about_title;
+                    SetTextColor(hdc, title_ctrl ? RGB(28, 34, 46) : RGB(52, 58, 70));
+                    SetBkMode(hdc, TRANSPARENT);
+                    return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
+                }
+
+                SetTextColor(hdc, RGB(36, 42, 52));
+                SetBkMode(hdc, TRANSPARENT);
+                return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
+            }
+            break;
         case WM_CLOSE:
             DestroyWindow(hwnd);
             return 0;
         case WM_DESTROY:
-            if (app) {
+            if (state && state->app) {
                 app->settings_hwnd_ = nullptr;
             }
             return 0;
+        case WM_NCDESTROY:
+            if (state) {
+                if (state->title_font) {
+                    DeleteObject(state->title_font);
+                }
+                if (state->nav_font) {
+                    DeleteObject(state->nav_font);
+                }
+                if (state->body_font) {
+                    DeleteObject(state->body_font);
+                }
+                delete state;
+                SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
+            break;
         default:
             break;
     }

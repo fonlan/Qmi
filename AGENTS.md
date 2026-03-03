@@ -34,9 +34,17 @@
   - Thumbnail cell background is semi-transparent neutral (non-black), so transparent pixels in thumbnails do not appear with a black matte.
   - SVG files are rasterized for filmstrip thumbnails (no placeholder-only SVG cells).
 - Right-click context menu: `Open image...`, `Settings...`, `Exit`.
-- Settings window toggles:
-  - Fit-to-window when switching image
-  - Smooth interpolation while zooming
+- Settings window uses a two-column layout:
+  - Left navigation menu: `常规`, `关联`, `关于`
+  - Left navigation has no header label and uses a compact width
+  - Visual style follows a modern web-like modal look with minimal, plain background treatment
+  - Left navigation area and right options area are borderless (no inset/client-edge frames)
+  - Custom tinted background blocks are removed; selection is indicated by typography/accent only
+  - Right-side option text/background rendering is transparent (no filled text backing)
+  - Existing toggles are under `常规`:
+    - Fit-to-window when switching image
+    - Smooth interpolation while zooming
+  - `关联` and `关于` are informational sections in the current implementation.
 - Keyboard:
   - `Left/Up`: previous image
   - `Right/Down`: next image
