@@ -361,7 +361,9 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
 
     TryOpenInitialImage(startup_path);
 
-    const int initial_show_cmd = (show_cmd == SW_HIDE) ? SW_SHOWNORMAL : show_cmd;
+    const bool use_maximized_startup = show_cmd == SW_HIDE || show_cmd == SW_SHOWNORMAL || show_cmd == SW_NORMAL ||
+                                       show_cmd == SW_SHOW || show_cmd == SW_SHOWDEFAULT || show_cmd == SW_RESTORE;
+    const int initial_show_cmd = use_maximized_startup ? SW_SHOWMAXIMIZED : show_cmd;
     ShowWindow(hwnd_, initial_show_cmd);
     RequestRender();
     UpdateWindow(hwnd_);

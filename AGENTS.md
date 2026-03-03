@@ -54,6 +54,7 @@
 - Otherwise, it scans the current working directory and opens the first supported image found.
 - Startup uses a fast-open path: it first decodes/displays the target image, then defers full sibling-directory indexing to a startup timer so first paint is not blocked by large folder scans.
 - Main window show is deferred until after device resources are ready and startup image probing finishes; startup then explicitly requests an initial render to avoid taskbar-only/invisible layered-window startup.
+- Main window defaults to maximized on startup (normal/show/default/restore launch states are promoted to `SW_SHOWMAXIMIZED`).
 
 ## Build
 
