@@ -28,6 +28,7 @@
 - Mouse wheel zoom is cursor-anchored and active only inside image viewport.
 - Dragging/zooming repaint requests are throttled to ~60 FPS (16 ms minimum interval); idle state does not run a continuous render loop.
 - Bottom filmstrip shows sibling images in current directory; click thumbnail to switch.
+  - Thumbnail decode in filmstrip is progressive (per-frame budgeted), so first frame is prioritized over decoding all visible thumbnails at once.
 - Right-click context menu: `Open image...`, `Settings...`, `Exit`.
 - Settings window toggles:
   - Fit-to-window when switching image
@@ -85,10 +86,10 @@ Build output executable:
   - `GetTitleButtons`
 - Rendering:
   - `Render`
-  - `CreateWindowSizeResources` (offscreen texture + readback surface setup)
+  - `CreateWindowSizeResources` (offscreen texture + readback surface setup; bitmap reload only when D2D context is recreated)
   - `PresentLayeredFrame` (copy GPU frame to DIB then `UpdateLayeredWindow`)
   - `DrawImageRegion`
-  - `DrawFilmStrip`
+  - `DrawFilmStrip` (progressive thumbnail loading with per-frame decode budget)
   - `DrawTitleButtons`
 - Input:
   - Zoom: `HandleMouseWheel`

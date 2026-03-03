@@ -76,6 +76,7 @@ constexpr int kTitleButtonHeight = 34;
 constexpr float kViewportMargin = 0.0f;
 constexpr float kViewportBottomGap = 0.0f;
 constexpr ULONGLONG kInteractiveFrameIntervalMs = 16;
+constexpr int kThumbnailDecodeBudgetPerFrame = 1;
 constexpr BYTE kUiChromeAlpha = 200;
 constexpr float kUiChromeOpacity = static_cast<float>(kUiChromeAlpha) / 255.0f;
 constexpr float kViewportLetterboxOpacity = 0.50f;
@@ -295,6 +296,7 @@ private:
     ULONGLONG last_interactive_render_tick_ = 0;
     bool deferred_directory_build_pending_ = false;
     std::wstring deferred_directory_target_norm_;
+    bool bitmaps_need_reload_ = false;
 
     HDC layered_dc_ = nullptr;
     HBITMAP layered_bitmap_ = nullptr;
@@ -517,6 +519,7 @@ bool QmiApp::InitDeviceResources() {
         return false;
     }
     d2d_context_.As(&d2d_context5_);
+    bitmaps_need_reload_ = true;
 
     if (!CreateWindowSizeResources()) {
         return false;
@@ -610,9 +613,12 @@ bool QmiApp::CreateWindowSizeResources() {
     layered_height_ = height;
     layered_stride_ = width * 4;
 
-    thumbnails_.assign(images_.size(), Thumbnail{});
-    if (current_index_ >= 0 && current_index_ < static_cast<int>(images_.size())) {
-        LoadImageByIndex(current_index_, false);
+    if (bitmaps_need_reload_) {
+        thumbnails_.assign(images_.size(), Thumbnail{});
+        if (current_index_ >= 0 && current_index_ < static_cast<int>(images_.size())) {
+            LoadImageByIndex(current_index_, false);
+        }
+        bitmaps_need_reload_ = false;
     }
     return true;
 }
@@ -1282,12 +1288,27 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
 
     const int end = std::min(static_cast<int>(images_.size()), start + slots);
     float x = strip_rect.left + padding;
+    int remaining_decode_budget = kThumbnailDecodeBudgetPerFrame;
+    bool has_pending_visible_thumbnail = false;
+
+    if (current_index_ >= start && current_index_ < end && current_index_ < static_cast<int>(thumbnails_.size()) &&
+        !thumbnails_[current_index_].attempted && remaining_decode_budget > 0) {
+        EnsureThumbnailLoaded(current_index_);
+        --remaining_decode_budget;
+    }
 
     for (int i = start; i < end; ++i) {
         D2D1_RECT_F cell = D2D1::RectF(x, strip_rect.top + padding, x + item_w, strip_rect.top + padding + item_h);
         visible_thumbs_.push_back(VisibleThumb{i, cell});
 
-        EnsureThumbnailLoaded(i);
+        if (i != current_index_ && i < static_cast<int>(thumbnails_.size()) && !thumbnails_[i].attempted) {
+            if (remaining_decode_budget > 0) {
+                EnsureThumbnailLoaded(i);
+                --remaining_decode_budget;
+            } else {
+                has_pending_visible_thumbnail = true;
+            }
+        }
         const Thumbnail& thumb = thumbnails_[i];
         d2d_context_->FillRectangle(cell, brush_thumb_bg_.Get());
 
@@ -1311,6 +1332,10 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
         d2d_context_->DrawRectangle(cell, stroke_brush, stroke);
 
         x += item_w + gap;
+    }
+
+    if (has_pending_visible_thumbnail) {
+        RequestRender(true);
     }
 }
 
