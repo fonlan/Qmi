@@ -42,7 +42,7 @@
   - Thumbnail decode in filmstrip is progressive (per-frame budgeted), so first frame is prioritized over decoding all visible thumbnails at once.
   - Thumbnail cell background is semi-transparent neutral (non-black), so transparent pixels in thumbnails do not appear with a black matte.
   - SVG files are rasterized for filmstrip thumbnails (no placeholder-only SVG cells).
-- Right-click context menu: `打开图片...`, `设置...`, `退出`.
+- Right-click context menu: `打开...`, `设置...`, `退出`.
 - Settings window uses a two-column layout:
   - Left navigation menu: `常规`, `关联`, `关于`
   - Left navigation has no header label and uses a compact width

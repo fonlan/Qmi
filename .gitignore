@@ -3,4 +3,3 @@ build/
 .agents/
 .vs/
 *.user
-!Qmi.png

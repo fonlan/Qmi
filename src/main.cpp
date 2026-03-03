@@ -3022,7 +3022,7 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
         return;
     }
 
-    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00\u56fe\u7247...");
+    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00...");
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u8bbe\u7f6e...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa");
