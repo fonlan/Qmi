@@ -17,6 +17,7 @@
 #include <wincodec.h>
 #include <dwrite.h>
 #include <wrl/client.h>
+#include <webp/decode.h>
 
 #include <algorithm>
 #include <cmath>
@@ -24,6 +25,7 @@
 #include <cstring>
 #include <cwctype>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -107,6 +109,10 @@ bool IsSupportedExtension(const fs::path& p) {
     const std::wstring ext = ToLower(p.extension().wstring());
     return ext == L".jpg" || ext == L".jpeg" || ext == L".png" || ext == L".bmp" || ext == L".webp" ||
            ext == L".svg";
+}
+
+bool IsWebpExtension(const fs::path& p) {
+    return ToLower(p.extension().wstring()) == L".webp";
 }
 
 std::optional<fs::path> FindFirstSupportedImageInDirectory(const fs::path& directory) {
@@ -209,6 +215,12 @@ private:
                              ID2D1Bitmap1** out_bitmap,
                              float* out_width,
                              float* out_height);
+    HRESULT LoadWebpBitmap(const fs::path& path,
+                           UINT max_width,
+                           UINT max_height,
+                           ID2D1Bitmap1** out_bitmap,
+                           float* out_width,
+                           float* out_height);
     HRESULT LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg, float* out_width, float* out_height);
     void EnsureThumbnailLoaded(int index);
 
@@ -787,13 +799,147 @@ void QmiApp::TryOpenInitialImage(const std::optional<std::wstring>& startup_path
     }
 }
 
+HRESULT QmiApp::LoadWebpBitmap(const fs::path& path,
+                               UINT max_width,
+                               UINT max_height,
+                               ID2D1Bitmap1** out_bitmap,
+                               float* out_width,
+                               float* out_height) {
+    if (!out_bitmap || !d2d_context_) {
+        return E_POINTER;
+    }
+
+    *out_bitmap = nullptr;
+    if (out_width) {
+        *out_width = 0.0f;
+    }
+    if (out_height) {
+        *out_height = 0.0f;
+    }
+
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    }
+
+    const std::streamsize file_size = file.tellg();
+    if (file_size <= 0) {
+        return E_FAIL;
+    }
+
+    std::vector<std::uint8_t> encoded(static_cast<std::size_t>(file_size));
+    file.seekg(0, std::ios::beg);
+    if (!file.read(reinterpret_cast<char*>(encoded.data()), file_size)) {
+        return E_FAIL;
+    }
+
+    int src_w = 0;
+    int src_h = 0;
+    if (!WebPGetInfo(encoded.data(), encoded.size(), &src_w, &src_h) || src_w <= 0 || src_h <= 0) {
+        return E_FAIL;
+    }
+
+    int target_w = src_w;
+    int target_h = src_h;
+    if (max_width > 0 && max_height > 0 &&
+        (static_cast<UINT>(src_w) > max_width || static_cast<UINT>(src_h) > max_height)) {
+        const double ratio = std::min(static_cast<double>(max_width) / static_cast<double>(src_w),
+                                      static_cast<double>(max_height) / static_cast<double>(src_h));
+        target_w = std::max(1, static_cast<int>(std::lround(static_cast<double>(src_w) * ratio)));
+        target_h = std::max(1, static_cast<int>(std::lround(static_cast<double>(src_h) * ratio)));
+    }
+
+    WebPDecoderConfig config{};
+    if (!WebPInitDecoderConfig(&config)) {
+        return E_FAIL;
+    }
+
+    const VP8StatusCode features_status = WebPGetFeatures(encoded.data(), encoded.size(), &config.input);
+    if (features_status != VP8_STATUS_OK) {
+        return E_FAIL;
+    }
+
+    config.output.colorspace = MODE_BGRA;
+    if (target_w != src_w || target_h != src_h) {
+        config.options.use_scaling = 1;
+        config.options.scaled_width = target_w;
+        config.options.scaled_height = target_h;
+    }
+
+    const VP8StatusCode decode_status = WebPDecode(encoded.data(), encoded.size(), &config);
+    if (decode_status != VP8_STATUS_OK) {
+        WebPFreeDecBuffer(&config.output);
+        return E_FAIL;
+    }
+
+    const int decoded_w = config.output.width;
+    const int decoded_h = config.output.height;
+    const auto* decoded_pixels = config.output.u.RGBA.rgba;
+    const int decoded_stride = config.output.u.RGBA.stride;
+    if (!decoded_pixels || decoded_w <= 0 || decoded_h <= 0 || decoded_stride < decoded_w * 4) {
+        WebPFreeDecBuffer(&config.output);
+        return E_FAIL;
+    }
+
+    std::vector<std::uint8_t> premul_bgra(static_cast<std::size_t>(decoded_w) * static_cast<std::size_t>(decoded_h) * 4);
+    for (int y = 0; y < decoded_h; ++y) {
+        const auto* src_row = decoded_pixels + static_cast<std::size_t>(y) * static_cast<std::size_t>(decoded_stride);
+        auto* dst_row = premul_bgra.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(decoded_w) * 4;
+        for (int x = 0; x < decoded_w; ++x) {
+            const std::uint8_t b = src_row[x * 4 + 0];
+            const std::uint8_t g = src_row[x * 4 + 1];
+            const std::uint8_t r = src_row[x * 4 + 2];
+            const std::uint8_t a = src_row[x * 4 + 3];
+            if (a == 255) {
+                dst_row[x * 4 + 0] = b;
+                dst_row[x * 4 + 1] = g;
+                dst_row[x * 4 + 2] = r;
+            } else {
+                dst_row[x * 4 + 0] = static_cast<std::uint8_t>((static_cast<unsigned>(b) * a + 127u) / 255u);
+                dst_row[x * 4 + 1] = static_cast<std::uint8_t>((static_cast<unsigned>(g) * a + 127u) / 255u);
+                dst_row[x * 4 + 2] = static_cast<std::uint8_t>((static_cast<unsigned>(r) * a + 127u) / 255u);
+            }
+            dst_row[x * 4 + 3] = a;
+        }
+    }
+
+    WebPFreeDecBuffer(&config.output);
+
+    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    const HRESULT hr = d2d_context_->CreateBitmap(D2D1::SizeU(static_cast<UINT32>(decoded_w), static_cast<UINT32>(decoded_h)),
+                                                  premul_bgra.data(),
+                                                  static_cast<UINT32>(decoded_w * 4),
+                                                  &props,
+                                                  out_bitmap);
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    if (out_width) {
+        *out_width = static_cast<float>(decoded_w);
+    }
+    if (out_height) {
+        *out_height = static_cast<float>(decoded_h);
+    }
+    return S_OK;
+}
+
 HRESULT QmiApp::LoadRasterBitmap(const fs::path& path,
                                  UINT max_width,
                                  UINT max_height,
                                  ID2D1Bitmap1** out_bitmap,
                                  float* out_width,
                                  float* out_height) {
-    if (!out_bitmap || !d2d_context_ || !wic_factory_) {
+    if (!out_bitmap || !d2d_context_) {
+        return E_POINTER;
+    }
+
+    if (IsWebpExtension(path)) {
+        return LoadWebpBitmap(path, max_width, max_height, out_bitmap, out_width, out_height);
+    }
+
+    if (!wic_factory_) {
         return E_POINTER;
     }
 
@@ -957,7 +1103,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     }
 
     if (FAILED(hr) || image.type == ImageType::None) {
-        current_error_ = L"Unable to decode this image. For WebP, install a WIC codec.";
+        current_error_ = L"Unable to decode this image.";
         return false;
     }
 
@@ -2061,18 +2207,6 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                           nullptr);
             SendMessageW(smooth, BM_SETCHECK, app && app->smooth_sampling_ ? BST_CHECKED : BST_UNCHECKED, 0);
 
-            CreateWindowExW(0,
-                            L"STATIC",
-                            L"Tip: WebP decoding depends on a WIC codec installed in Windows.",
-                            WS_CHILD | WS_VISIBLE,
-                            18,
-                            120,
-                            330,
-                            40,
-                            hwnd,
-                            nullptr,
-                            nullptr,
-                            nullptr);
             return 0;
         }
         case WM_COMMAND:

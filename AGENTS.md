@@ -6,12 +6,12 @@
 - Language: C++20
 - UI/Windowing: Win32 API (custom chrome, borderless main window)
 - Rendering: Direct3D 11 + Direct2D 1.3/1.5
-- Imaging: WIC for raster formats, Direct2D SVG document for `.svg`
+- Imaging: WIC for `.jpg/.jpeg/.png/.bmp`, built-in `libwebp` for `.webp`, Direct2D SVG document for `.svg`
 - Build system: CMake (Visual Studio 2022 generator)
 
 ## Repository Layout
 
-- `CMakeLists.txt`: single `WIN32` target `Qmi`, links D2D/D3D/WIC/DWM/Win32 libs.
+- `CMakeLists.txt`: single `WIN32` target `Qmi`, links D2D/D3D/WIC/DWM/Win32 libs and `libwebp` (via CMake `FetchContent`).
 - `src/main.cpp`: entire application implementation in one file (`QmiApp`).
 
 ## Current UI/Behavior
@@ -44,7 +44,7 @@
 ## Format Support
 
 - Supported extensions: `.jpg`, `.jpeg`, `.png`, `.bmp`, `.webp`, `.svg`.
-- WebP decoding depends on system WIC codec availability.
+- WebP decoding is built in via `libwebp` (does not require installing a system WIC WebP codec).
 
 ## Startup Behavior
 
@@ -79,6 +79,7 @@ Build output executable:
 - Window creation/backdrop: `CreateMainWindow`, `ApplyWindowBackdrop`
 - Image loading:
   - Raster: `LoadRasterBitmap`
+  - WebP built-in decode: `LoadWebpBitmap`
   - SVG: `LoadSvgDocument`
   - File switch/open: `LoadImageByIndex`, `OpenImagePath`
   - Startup deferred indexing: `TryOpenInitialImage`, `ScheduleDeferredDirectoryBuild`, `BuildDirectoryList`
