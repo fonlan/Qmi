@@ -288,6 +288,19 @@ std::wstring FormatFileTimeText(const FILETIME& utc_filetime) {
     return buffer;
 }
 
+std::wstring FormatZoomPercentText(float scale) {
+    const float percent = std::max(0.0f, scale * 100.0f);
+    const float rounded_percent = std::round(percent);
+
+    wchar_t buffer[32] = {};
+    if (std::fabs(percent - rounded_percent) <= 0.05f) {
+        swprintf_s(buffer, L"\u7f29\u653e %.0f%%", rounded_percent);
+    } else {
+        swprintf_s(buffer, L"\u7f29\u653e %.1f%%", percent);
+    }
+    return buffer;
+}
+
 std::wstring GetModulePath() {
     std::wstring result;
     DWORD capacity = MAX_PATH;
@@ -2966,8 +2979,19 @@ void QmiApp::DrawTopInfoBar(const TitleButtons& buttons) {
 
     const D2D1_RECT_F panel_rect = D2D1::RectF(left, top, right, bottom);
     const D2D1_RECT_F text_rect = D2D1::RectF(panel_rect.left + 10.0f, panel_rect.top, panel_rect.right - 10.0f, panel_rect.bottom);
-    d2d_context_->DrawTextW(current_image_info_.c_str(),
-                            static_cast<UINT32>(current_image_info_.size()),
+    std::wstring info_text = current_image_info_;
+    if (IsRenderableImageType(current_image_.type)) {
+        const D2D1_SIZE_F size = d2d_context_->GetSize();
+        const D2D1_RECT_F viewport = GetImageViewport(size.width, size.height);
+        const float current_scale = std::max(0.02f, GetBaseImageScale(viewport) * zoom_);
+        info_text += L" | ";
+        info_text += FormatZoomPercentText(current_scale);
+    } else {
+        info_text += L" | \u7f29\u653e -";
+    }
+
+    d2d_context_->DrawTextW(info_text.c_str(),
+                            static_cast<UINT32>(info_text.size()),
                             info_text_format_.Get(),
                             text_rect,
                             brush_text_.Get(),
