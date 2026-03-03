@@ -3898,7 +3898,7 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     const bool can_copy_path = can_copy_file;
     const bool can_delete_file = can_copy_file;
     const bool can_open_containing_folder = can_copy_file;
-    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00...");
+    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00\u56fe\u7247");
     AppendMenuW(menu,
                 can_open_containing_folder ? MF_STRING : (MF_STRING | MF_GRAYED),
                 kMenuOpenContainingFolder,
@@ -3907,9 +3907,9 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     AppendMenuW(menu, can_copy_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyFile, L"\u590d\u5236\u6587\u4ef6");
     AppendMenuW(menu, can_copy_path ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImagePath, L"\u590d\u5236\u56fe\u7247\u8def\u5f84");
     AppendMenuW(menu, can_delete_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuDeleteFile, L"\u5220\u9664\u6587\u4ef6");
-    AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u8bbe\u7f6e...");
+    AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u7a0b\u5e8f\u8bbe\u7f6e");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa");
+    AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa\u7a0b\u5e8f");
 
     SetForegroundWindow(hwnd_);
     const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen_pt.x, screen_pt.y, 0, hwnd_, nullptr);
