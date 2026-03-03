@@ -579,9 +579,14 @@ std::optional<fs::path> FindFirstSupportedImageInDirectory(const fs::path& direc
 
 enum class ImageType {
     None,
+    Broken,
     Raster,
     Svg
 };
+
+bool IsRenderableImageType(ImageType type) {
+    return type == ImageType::Raster || type == ImageType::Svg;
+}
 
 enum class TitleButton {
     None,
@@ -879,6 +884,7 @@ private:
     void DrawTitleButtons(const TitleButtons& buttons);
     void DrawEdgeNavButtons(const D2D1_RECT_F& viewport);
     void DrawOpenButton(const D2D1_RECT_F& viewport);
+    void DrawBrokenImagePlaceholder(const D2D1_RECT_F& viewport);
     void DrawButtonGlyph(TitleButton button, const RECT& rect);
     void DrawCenteredText(const std::wstring& text, const D2D1_RECT_F& rect, IDWriteTextFormat* format);
     void DrawMessageOverlay(const std::wstring& text);
@@ -2101,9 +2107,14 @@ void QmiApp::UpdateCurrentImageInfo() {
         file_name = current_image_.path.wstring();
     }
 
-    const int pixel_w = std::max(1, static_cast<int>(std::lround(current_image_.width)));
-    const int pixel_h = std::max(1, static_cast<int>(std::lround(current_image_.height)));
-    const std::wstring resolution = std::to_wstring(pixel_w) + L"x" + std::to_wstring(pixel_h);
+    std::wstring resolution = L"-";
+    if (IsRenderableImageType(current_image_.type)) {
+        const int pixel_w = std::max(1, static_cast<int>(std::lround(current_image_.width)));
+        const int pixel_h = std::max(1, static_cast<int>(std::lround(current_image_.height)));
+        resolution = std::to_wstring(pixel_w) + L"x" + std::to_wstring(pixel_h);
+    } else if (current_image_.type == ImageType::Broken) {
+        resolution = L"损坏/无法解码";
+    }
 
     std::wstring file_size = L"-";
     std::wstring modified_time = L"-";
@@ -2155,9 +2166,14 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
         }
     }
 
-    if (FAILED(hr) || image.type == ImageType::None) {
+    const bool decode_failed = FAILED(hr) || image.type == ImageType::None;
+    if (decode_failed) {
+        image.type = ImageType::Broken;
+        image.width = 0.0f;
+        image.height = 0.0f;
         current_error_ = L"\u65e0\u6cd5\u89e3\u7801\u6b64\u56fe\u7247\u3002";
-        return false;
+    } else {
+        current_error_.clear();
     }
 
     current_image_ = std::move(image);
@@ -2165,7 +2181,6 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
         film_strip_scroll_index_ = -1;
     }
     current_index_ = index;
-    current_error_.clear();
     UpdateCurrentImageInfo();
     hover_open_button_ = false;
     pressed_open_button_ = false;
@@ -2282,7 +2297,7 @@ D2D1_RECT_F QmiApp::GetImageViewport(float width, float height) const {
 }
 
 float QmiApp::GetBaseImageScale(const D2D1_RECT_F& viewport) const {
-    if (current_image_.type == ImageType::None) {
+    if (!IsRenderableImageType(current_image_.type)) {
         return 1.0f;
     }
 
@@ -2295,7 +2310,7 @@ float QmiApp::GetBaseImageScale(const D2D1_RECT_F& viewport) const {
 }
 
 D2D1_RECT_F QmiApp::GetImageDestinationRect(const D2D1_RECT_F& viewport) const {
-    if (current_image_.type == ImageType::None) {
+    if (!IsRenderableImageType(current_image_.type)) {
         return D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
     }
 
@@ -2440,7 +2455,7 @@ bool QmiApp::HitTestOpenButton(POINT client_pt) const {
 }
 
 bool QmiApp::IsPointOverVisibleImage(POINT client_pt, const D2D1_RECT_F& viewport) const {
-    if (current_image_.type == ImageType::None) {
+    if (!IsRenderableImageType(current_image_.type)) {
         return false;
     }
 
@@ -2690,6 +2705,67 @@ void QmiApp::DrawOpenButton(const D2D1_RECT_F& viewport) {
     DrawCenteredText(L"\u6253\u5f00\u56fe\u7247...", button_rect, text_format_.Get());
 }
 
+void QmiApp::DrawBrokenImagePlaceholder(const D2D1_RECT_F& viewport) {
+    if (!d2d_context_ || !brush_panel_ || !brush_overlay_ || !brush_text_) {
+        return;
+    }
+
+    const float view_w = std::max(1.0f, viewport.right - viewport.left);
+    const float view_h = std::max(1.0f, viewport.bottom - viewport.top);
+    const float icon_w = Clamp(std::min(view_w, view_h) * 0.34f, 96.0f, 190.0f);
+    const float icon_h = icon_w * 0.72f;
+    const float cx = (viewport.left + viewport.right) * 0.5f;
+    const float cy = (viewport.top + viewport.bottom) * 0.5f - 12.0f;
+
+    const D2D1_RECT_F rect =
+        D2D1::RectF(cx - icon_w * 0.5f, cy - icon_h * 0.5f, cx + icon_w * 0.5f, cy + icon_h * 0.5f);
+    const D2D1_ROUNDED_RECT frame = D2D1::RoundedRect(rect, 10.0f, 10.0f);
+    d2d_context_->FillRoundedRectangle(frame, brush_panel_.Get());
+    d2d_context_->DrawRoundedRectangle(frame, brush_overlay_.Get(), 2.0f);
+
+    const float dot_r = std::max(4.0f, icon_w * 0.045f);
+    d2d_context_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(rect.left + icon_w * 0.2f, rect.top + icon_h * 0.24f), dot_r, dot_r),
+                              brush_text_.Get());
+
+    d2d_context_->DrawLine(D2D1::Point2F(rect.left + icon_w * 0.16f, rect.bottom - icon_h * 0.18f),
+                           D2D1::Point2F(rect.left + icon_w * 0.40f, rect.top + icon_h * 0.55f),
+                           brush_text_.Get(),
+                           1.8f);
+    d2d_context_->DrawLine(D2D1::Point2F(rect.left + icon_w * 0.40f, rect.top + icon_h * 0.55f),
+                           D2D1::Point2F(rect.left + icon_w * 0.58f, rect.bottom - icon_h * 0.30f),
+                           brush_text_.Get(),
+                           1.8f);
+    d2d_context_->DrawLine(D2D1::Point2F(rect.left + icon_w * 0.58f, rect.bottom - icon_h * 0.30f),
+                           D2D1::Point2F(rect.right - icon_w * 0.16f, rect.bottom - icon_h * 0.20f),
+                           brush_text_.Get(),
+                           1.8f);
+
+    const float crack_top = rect.top + icon_h * 0.08f;
+    const float crack_bottom = rect.bottom - icon_h * 0.08f;
+    const float crack_x = cx + icon_w * 0.06f;
+    d2d_context_->DrawLine(D2D1::Point2F(crack_x - 8.0f, crack_top + 3.0f),
+                           D2D1::Point2F(crack_x + 4.0f, crack_top + 24.0f),
+                           brush_text_.Get(),
+                           2.1f);
+    d2d_context_->DrawLine(D2D1::Point2F(crack_x + 4.0f, crack_top + 24.0f),
+                           D2D1::Point2F(crack_x - 6.0f, crack_top + 46.0f),
+                           brush_text_.Get(),
+                           2.1f);
+    d2d_context_->DrawLine(D2D1::Point2F(crack_x - 6.0f, crack_top + 46.0f),
+                           D2D1::Point2F(crack_x + 5.0f, crack_bottom - 12.0f),
+                           brush_text_.Get(),
+                           2.1f);
+    d2d_context_->DrawLine(D2D1::Point2F(crack_x + 5.0f, crack_bottom - 12.0f),
+                           D2D1::Point2F(crack_x - 2.0f, crack_bottom),
+                           brush_text_.Get(),
+                           2.1f);
+
+    const float text_top = rect.bottom + 12.0f;
+    DrawCenteredText(L"\u56fe\u7247\u5df2\u635f\u574f\u6216\u65e0\u6cd5\u89e3\u7801",
+                     D2D1::RectF(viewport.left + 20.0f, text_top, viewport.right - 20.0f, text_top + 28.0f),
+                     small_text_format_.Get());
+}
+
 void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
     if (!d2d_context_) {
         return;
@@ -2704,6 +2780,10 @@ void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
         const D2D1_RECT_F button_rect = GetOpenButtonRect(viewport);
         const float hint_top = std::min(viewport.bottom - 38.0f, button_rect.bottom + 12.0f);
         DrawCenteredText(L"\u6216\u62d6\u653e\u4e00\u4e2a\u56fe\u7247\u6587\u4ef6\u3002", D2D1::RectF(viewport.left + 20.0f, hint_top, viewport.right - 20.0f, hint_top + 26.0f), small_text_format_.Get());
+        return;
+    }
+    if (current_image_.type == ImageType::Broken) {
+        DrawBrokenImagePlaceholder(viewport);
         return;
     }
 
@@ -3059,7 +3139,7 @@ void QmiApp::HandleMouseWheel(short wheel_delta, POINT screen_pt) {
         return;
     }
 
-    if (current_image_.type == ImageType::None) {
+    if (!IsRenderableImageType(current_image_.type)) {
         return;
     }
 
