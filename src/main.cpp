@@ -80,6 +80,7 @@ constexpr int kThumbnailDecodeBudgetPerFrame = 1;
 constexpr BYTE kUiChromeAlpha = 200;
 constexpr float kUiChromeOpacity = static_cast<float>(kUiChromeAlpha) / 255.0f;
 constexpr float kViewportLetterboxOpacity = 0.50f;
+constexpr float kThumbnailCellOpacity = 0.58f;
 
 template <typename T>
 T Clamp(T v, T lo, T hi) {
@@ -184,7 +185,7 @@ public:
 
 private:
     bool RegisterWindowClasses();
-    bool CreateMainWindow(int show_cmd);
+    bool CreateMainWindow();
     bool InitDeviceIndependentResources();
     bool InitDeviceResources();
     bool CreateWindowSizeResources();
@@ -323,7 +324,7 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
         return false;
     }
 
-    if (!CreateMainWindow(show_cmd)) {
+    if (!CreateMainWindow()) {
         return false;
     }
 
@@ -334,6 +335,11 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
     }
 
     TryOpenInitialImage(startup_path);
+
+    const int initial_show_cmd = (show_cmd == SW_HIDE) ? SW_SHOWNORMAL : show_cmd;
+    ShowWindow(hwnd_, initial_show_cmd);
+    RequestRender();
+    UpdateWindow(hwnd_);
     return true;
 }
 
@@ -419,7 +425,7 @@ bool QmiApp::RegisterWindowClasses() {
     return true;
 }
 
-bool QmiApp::CreateMainWindow(int show_cmd) {
+bool QmiApp::CreateMainWindow() {
     const DWORD style = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
     const DWORD ex_style = WS_EX_APPWINDOW | WS_EX_LAYERED;
     hwnd_ = CreateWindowExW(ex_style,
@@ -439,8 +445,6 @@ bool QmiApp::CreateMainWindow(int show_cmd) {
     }
 
     DragAcceptFiles(hwnd_, TRUE);
-    ShowWindow(hwnd_, show_cmd);
-    UpdateWindow(hwnd_);
     return true;
 }
 
@@ -649,7 +653,7 @@ void QmiApp::CreateBrushes() {
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xE81123, 0.82f), &brush_close_hover_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x111111, kViewportLetterboxOpacity), &brush_viewport_bg_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x111111, 1.0f), &brush_image_bg_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x222222, kUiChromeOpacity), &brush_thumb_bg_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x6D7685, kThumbnailCellOpacity), &brush_thumb_bg_);
 }
 
 void QmiApp::DiscardDeviceResources() {

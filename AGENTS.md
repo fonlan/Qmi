@@ -29,6 +29,7 @@
 - Dragging/zooming repaint requests are throttled to ~60 FPS (16 ms minimum interval); idle state does not run a continuous render loop.
 - Bottom filmstrip shows sibling images in current directory; click thumbnail to switch.
   - Thumbnail decode in filmstrip is progressive (per-frame budgeted), so first frame is prioritized over decoding all visible thumbnails at once.
+  - Thumbnail cell background is semi-transparent neutral (non-black), so transparent pixels in thumbnails do not appear with a black matte.
 - Right-click context menu: `Open image...`, `Settings...`, `Exit`.
 - Settings window toggles:
   - Fit-to-window when switching image
@@ -49,6 +50,7 @@
 - If a command-line image path is provided, Qmi tries to open it first.
 - Otherwise, it scans the current working directory and opens the first supported image found.
 - Startup uses a fast-open path: it first decodes/displays the target image, then defers full sibling-directory indexing to a startup timer so first paint is not blocked by large folder scans.
+- Main window show is deferred until after device resources are ready and startup image probing finishes; startup then explicitly requests an initial render to avoid taskbar-only/invisible layered-window startup.
 
 ## Build
 
