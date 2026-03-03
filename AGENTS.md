@@ -51,7 +51,9 @@
   - Existing toggles are under `常规`:
     - Fit-to-window when switching image
     - Smooth interpolation while zooming
-  - `关联` and `关于` are informational sections in the current implementation.
+  - `关联` page provides per-extension checkboxes (`.jpg/.jpeg/.png/.bmp/.ico/.webp/.gif/.svg`) and `全选` / `全不选` / `应用关联` actions.
+  - Applying associations writes/removes current-user (`HKCU\Software\Classes`) ProgID mappings for selected extensions, then refreshes shell association cache.
+  - `关于` remains informational.
 - Keyboard:
   - `Left/Up`: previous image
   - `Right/Down`: next image
@@ -125,6 +127,9 @@ Build output executable:
   - Open button hit-test: `HitTestOpenButton`
   - Drag hit-test: `IsPointOverVisibleImage`
   - Window/event dispatch: `HandleMessage`
+- File associations (settings page):
+  - Registry apply/read helpers: `ApplyQmiFileAssociations`, `IsExtensionAssociatedToQmi`, `BuildQmiProgId`
+  - Settings UI glue: `SyncAssociationSelections`, `ApplyAssociationSelectionFromUi`
 
 ## Known Limitations
 

@@ -13,6 +13,7 @@
 #include <dwmapi.h>
 #include <dxgi1_2.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shlwapi.h>
 #include <wincodec.h>
 #include <dwrite.h>
@@ -20,6 +21,7 @@
 #include <webp/decode.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -41,6 +43,7 @@
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -75,6 +78,10 @@ constexpr UINT_PTR kAnimationTimerId = 3;
 constexpr int kCtrlFitOnSwitch = 2001;
 constexpr int kCtrlSmoothSampling = 2002;
 constexpr int kCtrlSettingsNav = 2100;
+constexpr int kCtrlAssociationApply = 2200;
+constexpr int kCtrlAssociationSelectAll = 2201;
+constexpr int kCtrlAssociationClearAll = 2202;
+constexpr int kCtrlAssociationCheckboxBase = 2300;
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -97,6 +104,32 @@ T Clamp(T v, T lo, T hi) {
     return std::max(lo, std::min(v, hi));
 }
 
+struct AssociationTypeOption {
+    const wchar_t* extension = L"";
+    const wchar_t* label = L"";
+};
+
+constexpr std::array<AssociationTypeOption, 8> kAssociationTypes = {{
+    {L".jpg", L"JPG (*.jpg)"},
+    {L".jpeg", L"JPEG (*.jpeg)"},
+    {L".png", L"PNG (*.png)"},
+    {L".bmp", L"BMP (*.bmp)"},
+    {L".ico", L"ICO (*.ico)"},
+    {L".webp", L"WebP (*.webp)"},
+    {L".gif", L"GIF (*.gif)"},
+    {L".svg", L"SVG (*.svg)"},
+}};
+
+int AssociationCheckboxControlId(size_t index) {
+    return kCtrlAssociationCheckboxBase + static_cast<int>(index);
+}
+
+bool IsAssociationCheckboxControlId(int control_id) {
+    const int lower = kCtrlAssociationCheckboxBase;
+    const int upper = lower + static_cast<int>(kAssociationTypes.size());
+    return control_id >= lower && control_id < upper;
+}
+
 std::wstring ToLower(std::wstring s) {
     std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c) {
         return static_cast<wchar_t>(std::towlower(c));
@@ -111,6 +144,221 @@ std::wstring NormalizePathLower(const fs::path& p) {
         absolute = p;
     }
     return ToLower(absolute.lexically_normal().wstring());
+}
+
+std::wstring GetModulePath() {
+    std::wstring result;
+    DWORD capacity = MAX_PATH;
+    while (capacity <= 32768) {
+        std::vector<wchar_t> buffer(capacity, L'\0');
+        const DWORD copied = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (copied == 0) {
+            return L"";
+        }
+        if (copied < buffer.size() - 1) {
+            result.assign(buffer.data(), copied);
+            return result;
+        }
+        capacity *= 2;
+    }
+    return L"";
+}
+
+std::wstring BuildQmiProgId(const std::wstring& extension) {
+    std::wstring cleaned = extension;
+    cleaned.erase(std::remove(cleaned.begin(), cleaned.end(), L'.'), cleaned.end());
+    cleaned = ToLower(cleaned);
+    return L"Qmi.Image." + cleaned;
+}
+
+bool WriteRegistryString(HKEY root, const std::wstring& subkey, const wchar_t* value_name, const std::wstring& value) {
+    HKEY key = nullptr;
+    LONG status = RegCreateKeyExW(root, subkey.c_str(), 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    const DWORD size_bytes = static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t));
+    status = RegSetValueExW(key,
+                            value_name,
+                            0,
+                            REG_SZ,
+                            reinterpret_cast<const BYTE*>(value.c_str()),
+                            size_bytes);
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS;
+}
+
+bool WriteRegistryEmptyValue(HKEY root, const std::wstring& subkey, const std::wstring& value_name) {
+    HKEY key = nullptr;
+    LONG status = RegCreateKeyExW(root, subkey.c_str(), 0, nullptr, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+    status = RegSetValueExW(key, value_name.c_str(), 0, REG_NONE, nullptr, 0);
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS;
+}
+
+std::optional<std::wstring> ReadRegistryString(HKEY root, const std::wstring& subkey, const wchar_t* value_name) {
+    HKEY key = nullptr;
+    LONG status = RegOpenKeyExW(root, subkey.c_str(), 0, KEY_QUERY_VALUE, &key);
+    if (status != ERROR_SUCCESS) {
+        return std::nullopt;
+    }
+
+    DWORD type = 0;
+    DWORD size_bytes = 0;
+    status = RegQueryValueExW(key, value_name, nullptr, &type, nullptr, &size_bytes);
+    if (status != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) {
+        RegCloseKey(key);
+        return std::nullopt;
+    }
+
+    std::vector<wchar_t> buffer((size_bytes / sizeof(wchar_t)) + 1, L'\0');
+    status = RegQueryValueExW(key,
+                              value_name,
+                              nullptr,
+                              &type,
+                              reinterpret_cast<BYTE*>(buffer.data()),
+                              &size_bytes);
+    RegCloseKey(key);
+    if (status != ERROR_SUCCESS) {
+        return std::nullopt;
+    }
+    return std::wstring(buffer.data());
+}
+
+bool DeleteRegistryValue(HKEY root, const std::wstring& subkey, const wchar_t* value_name) {
+    HKEY key = nullptr;
+    LONG status = RegOpenKeyExW(root, subkey.c_str(), 0, KEY_SET_VALUE, &key);
+    if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND) {
+        return true;
+    }
+    if (status != ERROR_SUCCESS) {
+        return false;
+    }
+
+    status = RegDeleteValueW(key, value_name);
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND;
+}
+
+bool RegistryStringEquals(const std::wstring& a, const std::wstring& b) {
+    return ToLower(a) == ToLower(b);
+}
+
+bool IsExtensionAssociatedToQmi(const std::wstring& extension) {
+    const std::wstring key_path = L"Software\\Classes\\" + extension;
+    const std::optional<std::wstring> current_prog_id = ReadRegistryString(HKEY_CURRENT_USER, key_path, nullptr);
+    if (!current_prog_id.has_value()) {
+        return false;
+    }
+    return RegistryStringEquals(*current_prog_id, BuildQmiProgId(extension));
+}
+
+bool RemoveExtensionDefaultIfOwned(const std::wstring& extension, const std::wstring& prog_id) {
+    const std::wstring key_path = L"Software\\Classes\\" + extension;
+    const std::optional<std::wstring> current_prog_id = ReadRegistryString(HKEY_CURRENT_USER, key_path, nullptr);
+    if (!current_prog_id.has_value() || !RegistryStringEquals(*current_prog_id, prog_id)) {
+        return true;
+    }
+    return DeleteRegistryValue(HKEY_CURRENT_USER, key_path, nullptr);
+}
+
+bool ApplyQmiFileAssociations(const std::vector<bool>& checked, std::wstring* out_message) {
+    if (checked.size() != kAssociationTypes.size()) {
+        if (out_message) {
+            *out_message = L"\u5173\u8054\u9879\u6570\u91cf\u5f02\u5e38\uff0c\u672a\u5e94\u7528\u66f4\u6539\u3002";
+        }
+        return false;
+    }
+
+    const std::wstring module_path = GetModulePath();
+    if (module_path.empty()) {
+        if (out_message) {
+            *out_message = L"\u65e0\u6cd5\u83b7\u53d6 Qmi \u53ef\u6267\u884c\u6587\u4ef6\u8def\u5f84\u3002";
+        }
+        return false;
+    }
+
+    const std::wstring command = L"\"" + module_path + L"\" \"%1\"";
+    const std::wstring icon_ref = L"\"" + module_path + L"\",0";
+
+    if (!WriteRegistryString(HKEY_CURRENT_USER,
+                             L"Software\\Classes\\Applications\\Qmi.exe",
+                             L"FriendlyAppName",
+                             L"Qmi") ||
+        !WriteRegistryString(HKEY_CURRENT_USER,
+                             L"Software\\Classes\\Applications\\Qmi.exe\\shell\\open\\command",
+                             nullptr,
+                             command) ||
+        !WriteRegistryString(HKEY_CURRENT_USER,
+                             L"Software\\Classes\\Applications\\Qmi.exe\\DefaultIcon",
+                             nullptr,
+                             icon_ref)) {
+        if (out_message) {
+            *out_message = L"\u5199\u5165\u5e94\u7528\u6ce8\u518c\u4fe1\u606f\u5931\u8d25\u3002";
+        }
+        return false;
+    }
+
+    SHDeleteKeyW(HKEY_CURRENT_USER, L"Software\\Classes\\Applications\\Qmi.exe\\SupportedTypes");
+
+    size_t enabled_count = 0;
+    for (size_t i = 0; i < kAssociationTypes.size(); ++i) {
+        const std::wstring extension = kAssociationTypes[i].extension;
+        const std::wstring prog_id = BuildQmiProgId(extension);
+        if (checked[i]) {
+            const std::wstring prog_key = L"Software\\Classes\\" + prog_id;
+            const std::wstring ext_key = L"Software\\Classes\\" + extension;
+            if (!WriteRegistryString(HKEY_CURRENT_USER,
+                                     prog_key,
+                                     nullptr,
+                                     L"Qmi image file (" + extension + L")") ||
+                !WriteRegistryString(HKEY_CURRENT_USER, prog_key + L"\\DefaultIcon", nullptr, icon_ref) ||
+                !WriteRegistryString(HKEY_CURRENT_USER, prog_key + L"\\shell\\open\\command", nullptr, command) ||
+                !WriteRegistryString(HKEY_CURRENT_USER, ext_key, nullptr, prog_id) ||
+                !WriteRegistryEmptyValue(HKEY_CURRENT_USER, ext_key + L"\\OpenWithProgids", prog_id) ||
+                !WriteRegistryEmptyValue(HKEY_CURRENT_USER,
+                                         L"Software\\Classes\\Applications\\Qmi.exe\\SupportedTypes",
+                                         extension)) {
+                if (out_message) {
+                    *out_message = L"\u5199\u5165\u6269\u5c55\u540d\u5173\u8054\u5931\u8d25\uff1a" + extension;
+                }
+                return false;
+            }
+            ++enabled_count;
+            continue;
+        }
+
+        const std::wstring ext_key = L"Software\\Classes\\" + extension;
+        if (!RemoveExtensionDefaultIfOwned(extension, prog_id) ||
+            !DeleteRegistryValue(HKEY_CURRENT_USER, ext_key + L"\\OpenWithProgids", prog_id.c_str())) {
+            if (out_message) {
+                *out_message = L"\u79fb\u9664\u6269\u5c55\u540d\u5173\u8054\u5931\u8d25\uff1a" + extension;
+            }
+            return false;
+        }
+
+        SHDeleteKeyW(HKEY_CURRENT_USER, (L"Software\\Classes\\" + prog_id).c_str());
+    }
+
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
+    SendMessageTimeoutW(HWND_BROADCAST,
+                        WM_SETTINGCHANGE,
+                        0,
+                        reinterpret_cast<LPARAM>(L"Software\\Classes"),
+                        SMTO_ABORTIFHUNG,
+                        1500,
+                        nullptr);
+
+    if (out_message) {
+        *out_message =
+            L"\u5df2\u5e94\u7528 " + std::to_wstring(enabled_count) +
+            L" \u79cd\u6587\u4ef6\u7c7b\u578b\u5173\u8054\u3002\u82e5\u7cfb\u7edf\u4ecd\u672a\u5207\u6362\uff0c\u8bf7\u5728 Windows \u9ed8\u8ba4\u5e94\u7528\u4e2d\u5c06\u5bf9\u5e94\u683c\u5f0f\u8bbe\u4e3a Qmi\u3002";
+    }
+    return true;
 }
 
 bool IsSupportedExtension(const fs::path& p) {
@@ -344,7 +592,12 @@ struct SettingsWindowState {
     HWND fit_checkbox = nullptr;
     HWND smooth_checkbox = nullptr;
 
-    HWND associations_text = nullptr;
+    HWND associations_hint = nullptr;
+    std::vector<HWND> association_checkboxes;
+    HWND association_select_all_button = nullptr;
+    HWND association_clear_all_button = nullptr;
+    HWND association_apply_button = nullptr;
+    HWND association_status = nullptr;
 
     HWND about_text = nullptr;
 
@@ -357,6 +610,58 @@ void SetControlFont(HWND hwnd, HFONT font) {
         return;
     }
     SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+}
+
+void SetAssociationStatus(SettingsWindowState* state, const std::wstring& text) {
+    if (!state || !state->association_status) {
+        return;
+    }
+
+    HWND status_hwnd = state->association_status;
+    SetWindowTextW(status_hwnd, text.c_str());
+
+    HWND parent_hwnd = GetParent(status_hwnd);
+    RECT status_rect{};
+    if (parent_hwnd && GetWindowRect(status_hwnd, &status_rect)) {
+        MapWindowPoints(nullptr, parent_hwnd, reinterpret_cast<POINT*>(&status_rect), 2);
+        RedrawWindow(parent_hwnd, &status_rect, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    }
+    RedrawWindow(status_hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+}
+
+void SyncAssociationSelections(SettingsWindowState* state) {
+    if (!state) {
+        return;
+    }
+    for (size_t i = 0; i < state->association_checkboxes.size() && i < kAssociationTypes.size(); ++i) {
+        const bool is_checked = IsExtensionAssociatedToQmi(kAssociationTypes[i].extension);
+        SendMessageW(state->association_checkboxes[i], BM_SETCHECK, is_checked ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+}
+
+void SetAllAssociationSelections(SettingsWindowState* state, bool checked) {
+    if (!state) {
+        return;
+    }
+    for (HWND checkbox : state->association_checkboxes) {
+        SendMessageW(checkbox, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+}
+
+bool ApplyAssociationSelectionFromUi(SettingsWindowState* state, std::wstring* out_message) {
+    if (!state) {
+        if (out_message) {
+            *out_message = L"\u8bbe\u7f6e\u7a97\u53e3\u72b6\u6001\u4e0d\u53ef\u7528\u3002";
+        }
+        return false;
+    }
+
+    std::vector<bool> checked;
+    checked.reserve(state->association_checkboxes.size());
+    for (HWND checkbox : state->association_checkboxes) {
+        checked.push_back(SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED);
+    }
+    return ApplyQmiFileAssociations(checked, out_message);
 }
 
 void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
@@ -372,7 +677,14 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
     ShowWindow(state->fit_checkbox, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->smooth_checkbox, show_general ? SW_SHOW : SW_HIDE);
 
-    ShowWindow(state->associations_text, show_associations ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->associations_hint, show_associations ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->association_select_all_button, show_associations ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->association_clear_all_button, show_associations ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->association_apply_button, show_associations ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->association_status, show_associations ? SW_SHOW : SW_HIDE);
+    for (HWND checkbox : state->association_checkboxes) {
+        ShowWindow(checkbox, show_associations ? SW_SHOW : SW_HIDE);
+    }
 
     ShowWindow(state->about_text, show_about ? SW_SHOW : SW_HIDE);
     if (state->nav_list) {
@@ -414,7 +726,37 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
     MoveWindow(state->fit_checkbox, panel_x + kPanelPaddingX, panel_y + 8, text_width, 28, TRUE);
     MoveWindow(state->smooth_checkbox, panel_x + kPanelPaddingX, panel_y + 44, text_width, 28, TRUE);
 
-    MoveWindow(state->associations_text, panel_x + kPanelPaddingX, panel_y + 8, text_width, std::max(40, panel_height - 16),
+    const int association_hint_y = panel_y + 8;
+    MoveWindow(state->associations_hint, panel_x + kPanelPaddingX, association_hint_y, text_width, 44, TRUE);
+
+    constexpr int kAssociationColumns = 2;
+    constexpr int kAssociationRowHeight = 30;
+    constexpr int kAssociationColGap = 16;
+    const int association_cell_width = std::max(90, (text_width - kAssociationColGap) / kAssociationColumns);
+    const int association_grid_y = association_hint_y + 52;
+    for (size_t i = 0; i < state->association_checkboxes.size(); ++i) {
+        const int col = static_cast<int>(i % kAssociationColumns);
+        const int row = static_cast<int>(i / kAssociationColumns);
+        const int x = panel_x + kPanelPaddingX + col * (association_cell_width + kAssociationColGap);
+        const int y = association_grid_y + row * kAssociationRowHeight;
+        MoveWindow(state->association_checkboxes[i], x, y, association_cell_width, 24, TRUE);
+    }
+
+    const int association_rows = static_cast<int>((state->association_checkboxes.size() + kAssociationColumns - 1) /
+                                                  kAssociationColumns);
+    const int button_y = association_grid_y + association_rows * kAssociationRowHeight + 4;
+    constexpr int kAssociationButtonGap = 10;
+    const int button_width = std::max(1, (text_width - kAssociationButtonGap * 2) / 3);
+    const int button2_x = panel_x + kPanelPaddingX + button_width + kAssociationButtonGap;
+    const int button3_x = button2_x + button_width + kAssociationButtonGap;
+    MoveWindow(state->association_select_all_button, panel_x + kPanelPaddingX, button_y, button_width, 30, TRUE);
+    MoveWindow(state->association_clear_all_button, button2_x, button_y, button_width, 30, TRUE);
+    MoveWindow(state->association_apply_button, button3_x, button_y, button_width, 30, TRUE);
+    MoveWindow(state->association_status,
+               panel_x + kPanelPaddingX,
+               button_y + 38,
+               text_width,
+               std::max(34, panel_height - (button_y - panel_y) - 42),
                TRUE);
 
     MoveWindow(state->about_text, panel_x + kPanelPaddingX, panel_y + 8, text_width, std::max(40, panel_height - 16), TRUE);
@@ -2923,19 +3265,92 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                          app && app->smooth_sampling_ ? BST_CHECKED : BST_UNCHECKED,
                          0);
 
-            state->associations_text = CreateWindowExW(
+            state->associations_hint = CreateWindowExW(0,
+                                                       L"STATIC",
+                                                       L"\u9009\u62e9\u9700\u8981\u7531 Qmi \u6253\u5f00\u7684\u6587\u4ef6\u7c7b\u578b\uff0c\u7136\u540e\u70b9\u51fb\u201c\u5e94\u7528\u5173\u8054\u201d\u3002",
+                                                       WS_CHILD | WS_VISIBLE,
+                                                       0,
+                                                       0,
+                                                       0,
+                                                       0,
+                                                       hwnd,
+                                                       nullptr,
+                                                       nullptr,
+                                                       nullptr);
+
+            state->association_checkboxes.reserve(kAssociationTypes.size());
+            for (size_t i = 0; i < kAssociationTypes.size(); ++i) {
+                HWND checkbox = CreateWindowExW(
+                    0,
+                    L"BUTTON",
+                    kAssociationTypes[i].label,
+                    WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_FLAT,
+                    0,
+                    0,
+                    0,
+                    0,
+                    hwnd,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(AssociationCheckboxControlId(i))),
+                    nullptr,
+                    nullptr);
+                state->association_checkboxes.push_back(checkbox);
+            }
+
+            state->association_select_all_button = CreateWindowExW(
                 0,
-                L"STATIC",
-                L"\u8fd9\u91cc\u7528\u4e8e\u7ba1\u7406\u56fe\u7247\u6587\u4ef6\u4e0e Qmi \u7684\u5173\u8054\u65b9\u5f0f\u3002\r\n\r\n\u5f53\u524d\u7248\u672c\u6682\u672a\u63d0\u4f9b\u53ef\u914d\u7f6e\u9879\u3002",
-                WS_CHILD | WS_VISIBLE,
+                L"BUTTON",
+                L"\u5168\u9009",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 0,
                 0,
                 0,
                 0,
                 hwnd,
-                nullptr,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlAssociationSelectAll)),
                 nullptr,
                 nullptr);
+
+            state->association_clear_all_button = CreateWindowExW(
+                0,
+                L"BUTTON",
+                L"\u5168\u4e0d\u9009",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlAssociationClearAll)),
+                nullptr,
+                nullptr);
+
+            state->association_apply_button = CreateWindowExW(
+                0,
+                L"BUTTON",
+                L"\u5e94\u7528\u5173\u8054",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlAssociationApply)),
+                nullptr,
+                nullptr);
+
+            state->association_status = CreateWindowExW(0,
+                                                        L"STATIC",
+                                                        L"\u52fe\u9009\u6269\u5c55\u540d\u540e\uff0c\u70b9\u51fb\u201c\u5e94\u7528\u5173\u8054\u201d\u4fdd\u5b58\u66f4\u6539\u3002",
+                                                        WS_CHILD | WS_VISIBLE,
+                                                        0,
+                                                        0,
+                                                        0,
+                                                        0,
+                                                        hwnd,
+                                                        nullptr,
+                                                        nullptr,
+                                                        nullptr);
+            SyncAssociationSelections(state);
 
             state->about_text = CreateWindowExW(0,
                                                 L"STATIC",
@@ -2953,7 +3368,14 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             SetControlFont(state->nav_list, state->nav_font);
             SetControlFont(state->fit_checkbox, state->body_font);
             SetControlFont(state->smooth_checkbox, state->body_font);
-            SetControlFont(state->associations_text, state->body_font);
+            SetControlFont(state->associations_hint, state->body_font);
+            for (HWND checkbox : state->association_checkboxes) {
+                SetControlFont(checkbox, state->body_font);
+            }
+            SetControlFont(state->association_select_all_button, state->body_font);
+            SetControlFont(state->association_clear_all_button, state->body_font);
+            SetControlFont(state->association_apply_button, state->body_font);
+            SetControlFont(state->association_status, state->body_font);
             SetControlFont(state->about_text, state->body_font);
 
             SetActiveSettingsPage(state, static_cast<int>(SettingsPage::General));
@@ -3019,6 +3441,32 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
                 return 0;
             }
+            if (HIWORD(wparam) == BN_CLICKED) {
+                const int control_id = LOWORD(wparam);
+                if (control_id == kCtrlAssociationSelectAll) {
+                    SetAllAssociationSelections(state, true);
+                    SetAssociationStatus(state,
+                                         L"\u5df2\u5168\u9009\uff0c\u8bf7\u70b9\u51fb\u201c\u5e94\u7528\u5173\u8054\u201d\u4fdd\u5b58\u66f4\u6539\u3002");
+                    return 0;
+                }
+                if (control_id == kCtrlAssociationClearAll) {
+                    SetAllAssociationSelections(state, false);
+                    SetAssociationStatus(state,
+                                         L"\u5df2\u5168\u4e0d\u9009\uff0c\u8bf7\u70b9\u51fb\u201c\u5e94\u7528\u5173\u8054\u201d\u4fdd\u5b58\u66f4\u6539\u3002");
+                    return 0;
+                }
+                if (control_id == kCtrlAssociationApply) {
+                    std::wstring result;
+                    ApplyAssociationSelectionFromUi(state, &result);
+                    SetAssociationStatus(state, result);
+                    SyncAssociationSelections(state);
+                    return 0;
+                }
+                if (IsAssociationCheckboxControlId(control_id)) {
+                    SetAssociationStatus(state, L"\u66f4\u6539\u5c1a\u672a\u5e94\u7528\uff0c\u8bf7\u70b9\u51fb\u201c\u5e94\u7528\u5173\u8054\u201d\u3002");
+                    return 0;
+                }
+            }
             if (app && HIWORD(wparam) == BN_CLICKED) {
                 if (LOWORD(wparam) == kCtrlFitOnSwitch && lparam) {
                     app->fit_on_switch_ = SendMessageW(reinterpret_cast<HWND>(lparam), BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -3040,9 +3488,22 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
         case WM_CTLCOLORBTN:
             if (state) {
                 const HWND ctrl = reinterpret_cast<HWND>(lparam);
+                if (ctrl == state->association_select_all_button || ctrl == state->association_clear_all_button ||
+                    ctrl == state->association_apply_button) {
+                    break;
+                }
                 HDC hdc = reinterpret_cast<HDC>(wparam);
+                bool is_association_checkbox = false;
+                for (HWND checkbox : state->association_checkboxes) {
+                    if (ctrl == checkbox) {
+                        is_association_checkbox = true;
+                        break;
+                    }
+                }
+
                 const bool is_panel_ctrl = ctrl == state->fit_checkbox || ctrl == state->smooth_checkbox ||
-                                           ctrl == state->associations_text || ctrl == state->about_text;
+                                           ctrl == state->associations_hint || ctrl == state->association_status ||
+                                           ctrl == state->about_text || is_association_checkbox;
                 if (is_panel_ctrl) {
                     SetTextColor(hdc, RGB(52, 58, 70));
                     SetBkMode(hdc, TRANSPARENT);
