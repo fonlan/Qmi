@@ -36,6 +36,7 @@
 - Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
 - Mouse wheel behavior is region-aware: cursor-anchored zoom in the image viewport, horizontal filmstrip scrolling when hovering the bottom filmstrip.
 - GIF files play as animated images in the main viewport (timer-driven frame switching); filmstrip thumbnails use the first frame.
+  - Main viewport GIF playback uses on-demand sequential frame decode/composition (decode first frame on open, then decode one next frame per animation tick) to avoid full-frame bitmap predecode memory spikes.
 - On open/switch/reset view, large images are scaled down to fully fit the viewport; images smaller than the viewport are shown at 100% (no automatic upscaling).
 - Dragging/zooming repaint requests are throttled to ~60 FPS (16 ms minimum interval); idle state does not run a continuous render loop.
 - Bottom filmstrip shows sibling images in current directory; click thumbnail to switch.
@@ -107,7 +108,7 @@ Build output executable:
 - Window class registration/icon binding: `RegisterWindowClasses` + resource icon ID `101`
 - Image loading:
   - Raster: `LoadRasterBitmap`
-  - GIF animation decode/composition: `LoadGifAnimation`
+  - GIF animation decode/composition: `LoadGifAnimation`, `DecodeGifFrame`
   - WebP built-in decode: `LoadWebpBitmap`
   - SVG: `LoadSvgDocument`
   - File switch/open: `LoadImageByIndex`, `OpenImagePath`
@@ -145,7 +146,7 @@ Build output executable:
 
 ## Known Limitations
 
-- GIF animation currently pre-decodes all frames into in-memory bitmaps; very large/long GIFs can consume noticeable memory.
+- GIF playback now uses on-demand decoding to reduce memory footprint, but very large/long GIFs can still increase CPU usage during playback because each tick decodes/composites the next frame.
 
 ## Documentation Sync Rules
 - Every time you implement a new function or adjust a function, you need to check whether there are relevant instructions in `AGENTS.md`. If not, you need to add them.

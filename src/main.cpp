@@ -707,6 +707,14 @@ struct LoadedImage {
     float height = 0.0f;
 };
 
+struct GifFrameDescriptor {
+    UINT left = 0;
+    UINT top = 0;
+    UINT width = 0;
+    UINT height = 0;
+    UINT disposal = 0;
+};
+
 enum class SettingsPage {
     General = 0,
     Associations = 1,
@@ -944,6 +952,7 @@ private:
                            float* out_width,
                            float* out_height);
     HRESULT LoadGifAnimation(const fs::path& path, LoadedImage* out_image);
+    HRESULT DecodeGifFrame(size_t frame_index, ID2D1Bitmap1** out_bitmap);
     HRESULT LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg, float* out_width, float* out_height);
     HRESULT LoadSvgThumbnailBitmap(const fs::path& path,
                                    UINT max_width,
@@ -1058,9 +1067,21 @@ private:
     bool deferred_directory_build_pending_ = false;
     std::wstring deferred_directory_target_norm_;
     bool bitmaps_need_reload_ = false;
-    std::vector<ComPtr<ID2D1Bitmap1>> animation_frames_;
+    ComPtr<IWICBitmapDecoder> animation_decoder_;
+    std::vector<GifFrameDescriptor> animation_frame_descriptors_;
     std::vector<UINT> animation_frame_delays_ms_;
     size_t animation_frame_index_ = 0;
+    std::vector<std::uint8_t> animation_canvas_;
+    std::vector<std::uint8_t> animation_restore_canvas_;
+    bool animation_has_restore_canvas_ = false;
+    UINT animation_canvas_width_ = 0;
+    UINT animation_canvas_height_ = 0;
+    UINT animation_canvas_stride_ = 0;
+    UINT animation_prev_disposal_ = 0;
+    UINT animation_prev_left_ = 0;
+    UINT animation_prev_top_ = 0;
+    UINT animation_prev_width_ = 0;
+    UINT animation_prev_height_ = 0;
 
     HDC layered_dc_ = nullptr;
     HBITMAP layered_bitmap_ = nullptr;
@@ -1493,13 +1514,26 @@ void QmiApp::ClearAnimationState() {
     if (hwnd_) {
         KillTimer(hwnd_, kAnimationTimerId);
     }
-    animation_frames_.clear();
+    animation_decoder_.Reset();
+    animation_frame_descriptors_.clear();
     animation_frame_delays_ms_.clear();
     animation_frame_index_ = 0;
+    animation_canvas_.clear();
+    animation_restore_canvas_.clear();
+    animation_has_restore_canvas_ = false;
+    animation_canvas_width_ = 0;
+    animation_canvas_height_ = 0;
+    animation_canvas_stride_ = 0;
+    animation_prev_disposal_ = 0;
+    animation_prev_left_ = 0;
+    animation_prev_top_ = 0;
+    animation_prev_width_ = 0;
+    animation_prev_height_ = 0;
 }
 
 void QmiApp::ScheduleNextAnimationFrame() {
-    if (!hwnd_ || animation_frames_.size() <= 1 || animation_frame_delays_ms_.size() != animation_frames_.size()) {
+    if (!hwnd_ || !animation_decoder_ || animation_frame_delays_ms_.size() <= 1 ||
+        animation_frame_index_ >= animation_frame_delays_ms_.size()) {
         return;
     }
     const UINT delay = std::max<UINT>(1u, animation_frame_delays_ms_[animation_frame_index_]);
@@ -1856,9 +1890,7 @@ HRESULT QmiApp::LoadGifAnimation(const fs::path& path, LoadedImage* out_image) {
         return E_POINTER;
     }
 
-    animation_frames_.clear();
-    animation_frame_delays_ms_.clear();
-    animation_frame_index_ = 0;
+    ClearAnimationState();
 
     ComPtr<IWICBitmapDecoder> decoder;
     HRESULT hr = wic_factory_->CreateDecoderFromFilename(
@@ -1905,34 +1937,19 @@ HRESULT QmiApp::LoadGifAnimation(const fs::path& path, LoadedImage* out_image) {
         return E_FAIL;
     }
 
-    std::vector<std::uint8_t> canvas(canvas_size, 0);
-    std::vector<std::uint8_t> restore_canvas;
-    bool has_restore_canvas = false;
-
-    UINT prev_disposal = 0;
-    UINT prev_left = 0;
-    UINT prev_top = 0;
-    UINT prev_width = 0;
-    UINT prev_height = 0;
-
-    D2D1_BITMAP_PROPERTIES1 bitmap_props = D2D1::BitmapProperties1(
-        D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-
-    animation_frames_.reserve(frame_count);
+    animation_decoder_ = decoder;
+    animation_frame_descriptors_.reserve(frame_count);
     animation_frame_delays_ms_.reserve(frame_count);
+    animation_canvas_ = std::vector<std::uint8_t>(canvas_size, 0);
+    animation_canvas_width_ = canvas_width;
+    animation_canvas_height_ = canvas_height;
+    animation_canvas_stride_ = static_cast<UINT>(canvas_stride);
 
     for (UINT i = 0; i < frame_count; ++i) {
-        if (i > 0) {
-            if (prev_disposal == 2) {
-                ClearCanvasRect(canvas, canvas_width, canvas_height, prev_left, prev_top, prev_width, prev_height);
-            } else if (prev_disposal == 3 && has_restore_canvas && restore_canvas.size() == canvas.size()) {
-                canvas = restore_canvas;
-            }
-        }
-
         ComPtr<IWICBitmapFrameDecode> frame;
-        hr = decoder->GetFrame(i, &frame);
+        hr = animation_decoder_->GetFrame(i, &frame);
         if (FAILED(hr) || !frame) {
+            ClearAnimationState();
             return FAILED(hr) ? hr : E_FAIL;
         }
 
@@ -1940,84 +1957,29 @@ HRESULT QmiApp::LoadGifAnimation(const fs::path& path, LoadedImage* out_image) {
         UINT decode_height = 0;
         hr = frame->GetSize(&decode_width, &decode_height);
         if (FAILED(hr) || decode_width == 0 || decode_height == 0) {
+            ClearAnimationState();
             return FAILED(hr) ? hr : E_FAIL;
         }
 
-        UINT frame_left = 0;
-        UINT frame_top = 0;
-        UINT frame_rect_width = decode_width;
-        UINT frame_rect_height = decode_height;
-        UINT frame_disposal = 0;
+        GifFrameDescriptor frame_desc{};
+        frame_desc.width = decode_width;
+        frame_desc.height = decode_height;
         UINT frame_delay_cs = 0;
 
         ComPtr<IWICMetadataQueryReader> frame_reader;
         if (SUCCEEDED(frame->GetMetadataQueryReader(&frame_reader)) && frame_reader) {
-            TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Left", &frame_left);
-            TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Top", &frame_top);
+            TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Left", &frame_desc.left);
+            TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Top", &frame_desc.top);
             UINT metadata_width = 0;
             UINT metadata_height = 0;
             if (TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Width", &metadata_width) && metadata_width > 0) {
-                frame_rect_width = metadata_width;
+                frame_desc.width = metadata_width;
             }
             if (TryReadMetadataUInt(frame_reader.Get(), L"/imgdesc/Height", &metadata_height) && metadata_height > 0) {
-                frame_rect_height = metadata_height;
+                frame_desc.height = metadata_height;
             }
-            TryReadMetadataUInt(frame_reader.Get(), L"/grctlext/Disposal", &frame_disposal);
+            TryReadMetadataUInt(frame_reader.Get(), L"/grctlext/Disposal", &frame_desc.disposal);
             TryReadMetadataUInt(frame_reader.Get(), L"/grctlext/Delay", &frame_delay_cs);
-        }
-
-        const bool needs_restore = frame_disposal == 3;
-        if (needs_restore) {
-            restore_canvas = canvas;
-            has_restore_canvas = true;
-        } else {
-            has_restore_canvas = false;
-        }
-
-        ComPtr<IWICFormatConverter> converter;
-        hr = wic_factory_->CreateFormatConverter(&converter);
-        if (FAILED(hr) || !converter) {
-            return FAILED(hr) ? hr : E_FAIL;
-        }
-        hr = converter->Initialize(frame.Get(),
-                                   GUID_WICPixelFormat32bppPBGRA,
-                                   WICBitmapDitherTypeNone,
-                                   nullptr,
-                                   0.0f,
-                                   WICBitmapPaletteTypeMedianCut);
-        if (FAILED(hr)) {
-            return hr;
-        }
-
-        const size_t frame_stride = static_cast<size_t>(decode_width) * 4u;
-        if (decode_width != 0 && frame_stride / 4u != decode_width) {
-            return E_FAIL;
-        }
-        if (decode_height != 0 && frame_stride > std::numeric_limits<size_t>::max() / static_cast<size_t>(decode_height)) {
-            return E_FAIL;
-        }
-        const size_t frame_size = frame_stride * static_cast<size_t>(decode_height);
-        if (frame_stride > std::numeric_limits<UINT>::max() || frame_size > std::numeric_limits<UINT>::max() || frame_size == 0) {
-            return E_FAIL;
-        }
-
-        std::vector<std::uint8_t> frame_pixels(frame_size, 0);
-        hr = converter->CopyPixels(
-            nullptr, static_cast<UINT>(frame_stride), static_cast<UINT>(frame_size), frame_pixels.data());
-        if (FAILED(hr)) {
-            return hr;
-        }
-
-        CompositeFrame(canvas, canvas_width, canvas_height, frame_pixels, decode_width, decode_height, frame_left, frame_top);
-
-        ComPtr<ID2D1Bitmap1> frame_bitmap;
-        hr = d2d_context_->CreateBitmap(D2D1::SizeU(canvas_width, canvas_height),
-                                        canvas.data(),
-                                        static_cast<UINT32>(canvas_stride),
-                                        &bitmap_props,
-                                        &frame_bitmap);
-        if (FAILED(hr) || !frame_bitmap) {
-            return FAILED(hr) ? hr : E_FAIL;
         }
 
         ULONGLONG delay_ms = frame_delay_cs > 0 ? static_cast<ULONGLONG>(frame_delay_cs) * 10ull : kGifDefaultDelayMs;
@@ -2026,25 +1988,145 @@ HRESULT QmiApp::LoadGifAnimation(const fs::path& path, LoadedImage* out_image) {
             delay_ms = std::numeric_limits<UINT>::max();
         }
 
-        animation_frames_.push_back(frame_bitmap);
+        animation_frame_descriptors_.push_back(frame_desc);
         animation_frame_delays_ms_.push_back(static_cast<UINT>(delay_ms));
-
-        prev_disposal = frame_disposal;
-        prev_left = frame_left;
-        prev_top = frame_top;
-        prev_width = frame_rect_width;
-        prev_height = frame_rect_height;
     }
 
-    if (animation_frames_.empty()) {
+    if (animation_frame_descriptors_.empty() || animation_frame_delays_ms_.size() != animation_frame_descriptors_.size()) {
+        ClearAnimationState();
         return E_FAIL;
     }
 
+    ComPtr<ID2D1Bitmap1> first_frame;
+    hr = DecodeGifFrame(0, &first_frame);
+    if (FAILED(hr) || !first_frame) {
+        ClearAnimationState();
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
     out_image->type = ImageType::Raster;
-    out_image->raster = animation_frames_[0];
+    out_image->raster = first_frame;
     out_image->width = static_cast<float>(canvas_width);
     out_image->height = static_cast<float>(canvas_height);
     animation_frame_index_ = 0;
+    return S_OK;
+}
+
+HRESULT QmiApp::DecodeGifFrame(size_t frame_index, ID2D1Bitmap1** out_bitmap) {
+    if (!out_bitmap || !d2d_context_ || !wic_factory_ || !animation_decoder_ || frame_index >= animation_frame_descriptors_.size() ||
+        animation_frame_delays_ms_.size() != animation_frame_descriptors_.size() || animation_canvas_.empty() || animation_canvas_width_ == 0 ||
+        animation_canvas_height_ == 0 || animation_canvas_stride_ == 0) {
+        return E_POINTER;
+    }
+
+    *out_bitmap = nullptr;
+    if (frame_index == 0) {
+        std::fill(animation_canvas_.begin(), animation_canvas_.end(), 0);
+        animation_has_restore_canvas_ = false;
+        animation_prev_disposal_ = 0;
+        animation_prev_left_ = 0;
+        animation_prev_top_ = 0;
+        animation_prev_width_ = 0;
+        animation_prev_height_ = 0;
+    } else {
+        if (animation_prev_disposal_ == 2) {
+            ClearCanvasRect(animation_canvas_,
+                            animation_canvas_width_,
+                            animation_canvas_height_,
+                            animation_prev_left_,
+                            animation_prev_top_,
+                            animation_prev_width_,
+                            animation_prev_height_);
+        } else if (animation_prev_disposal_ == 3 && animation_has_restore_canvas_ &&
+                   animation_restore_canvas_.size() == animation_canvas_.size()) {
+            animation_canvas_ = animation_restore_canvas_;
+        }
+    }
+
+    ComPtr<IWICBitmapFrameDecode> frame;
+    HRESULT hr = animation_decoder_->GetFrame(static_cast<UINT>(frame_index), &frame);
+    if (FAILED(hr) || !frame) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    UINT decode_width = 0;
+    UINT decode_height = 0;
+    hr = frame->GetSize(&decode_width, &decode_height);
+    if (FAILED(hr) || decode_width == 0 || decode_height == 0) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    ComPtr<IWICFormatConverter> converter;
+    hr = wic_factory_->CreateFormatConverter(&converter);
+    if (FAILED(hr) || !converter) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+    hr = converter->Initialize(frame.Get(),
+                               GUID_WICPixelFormat32bppPBGRA,
+                               WICBitmapDitherTypeNone,
+                               nullptr,
+                               0.0f,
+                               WICBitmapPaletteTypeMedianCut);
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    const size_t frame_stride = static_cast<size_t>(decode_width) * 4u;
+    if (decode_width != 0 && frame_stride / 4u != decode_width) {
+        return E_FAIL;
+    }
+    if (decode_height != 0 && frame_stride > std::numeric_limits<size_t>::max() / static_cast<size_t>(decode_height)) {
+        return E_FAIL;
+    }
+    const size_t frame_size = frame_stride * static_cast<size_t>(decode_height);
+    if (frame_stride > std::numeric_limits<UINT>::max() || frame_size > std::numeric_limits<UINT>::max() || frame_size == 0) {
+        return E_FAIL;
+    }
+
+    std::vector<std::uint8_t> frame_pixels(frame_size, 0);
+    hr = converter->CopyPixels(
+        nullptr, static_cast<UINT>(frame_stride), static_cast<UINT>(frame_size), frame_pixels.data());
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    const GifFrameDescriptor& desc = animation_frame_descriptors_[frame_index];
+    if (desc.disposal == 3) {
+        animation_restore_canvas_ = animation_canvas_;
+        animation_has_restore_canvas_ = true;
+    } else {
+        animation_has_restore_canvas_ = false;
+    }
+
+    CompositeFrame(animation_canvas_,
+                   animation_canvas_width_,
+                   animation_canvas_height_,
+                   frame_pixels,
+                   decode_width,
+                   decode_height,
+                   desc.left,
+                   desc.top);
+
+    const D2D1_BITMAP_PROPERTIES1 bitmap_props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+
+    ComPtr<ID2D1Bitmap1> frame_bitmap;
+    hr = d2d_context_->CreateBitmap(D2D1::SizeU(animation_canvas_width_, animation_canvas_height_),
+                                    animation_canvas_.data(),
+                                    animation_canvas_stride_,
+                                    &bitmap_props,
+                                    &frame_bitmap);
+    if (FAILED(hr) || !frame_bitmap) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    animation_prev_disposal_ = desc.disposal;
+    animation_prev_left_ = desc.left;
+    animation_prev_top_ = desc.top;
+    animation_prev_width_ = desc.width;
+    animation_prev_height_ = desc.height;
+
+    *out_bitmap = frame_bitmap.Detach();
     return S_OK;
 }
 
@@ -2278,7 +2360,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
         ResetView();
     }
 
-    if (animation_frames_.size() > 1) {
+    if (animation_decoder_ && animation_frame_delays_ms_.size() > 1) {
         ScheduleNextAnimationFrame();
     }
 
@@ -3527,12 +3609,20 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_TIMER:
             if (wparam == kAnimationTimerId) {
                 KillTimer(hwnd_, kAnimationTimerId);
-                if (animation_frames_.size() <= 1 || animation_frame_delays_ms_.size() != animation_frames_.size() ||
-                    current_image_.type != ImageType::Raster) {
+                if (!animation_decoder_ || animation_frame_delays_ms_.size() <= 1 || current_image_.type != ImageType::Raster) {
                     return 0;
                 }
-                animation_frame_index_ = (animation_frame_index_ + 1) % animation_frames_.size();
-                current_image_.raster = animation_frames_[animation_frame_index_];
+                const size_t frame_count = animation_frame_delays_ms_.size();
+                const size_t next_index = (animation_frame_index_ + 1) % frame_count;
+
+                ComPtr<ID2D1Bitmap1> next_frame;
+                if (FAILED(DecodeGifFrame(next_index, &next_frame)) || !next_frame) {
+                    ClearAnimationState();
+                    return 0;
+                }
+
+                animation_frame_index_ = next_index;
+                current_image_.raster = next_frame;
                 RequestRender();
                 ScheduleNextAnimationFrame();
                 return 0;
