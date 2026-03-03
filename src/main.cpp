@@ -63,6 +63,7 @@ constexpr UINT kMenuOpenFile = 1001;
 constexpr UINT kMenuSettings = 1002;
 constexpr UINT kMenuExit = 1003;
 constexpr UINT_PTR kRenderTimerId = 1;
+constexpr UINT_PTR kStartupScanTimerId = 2;
 
 constexpr int kCtrlFitOnSwitch = 2001;
 constexpr int kCtrlSmoothSampling = 2002;
@@ -104,6 +105,30 @@ bool IsSupportedExtension(const fs::path& p) {
     const std::wstring ext = ToLower(p.extension().wstring());
     return ext == L".jpg" || ext == L".jpeg" || ext == L".png" || ext == L".bmp" || ext == L".webp" ||
            ext == L".svg";
+}
+
+std::optional<fs::path> FindFirstSupportedImageInDirectory(const fs::path& directory) {
+    std::error_code iter_ec;
+    fs::directory_iterator it(directory, fs::directory_options::skip_permission_denied, iter_ec);
+    fs::directory_iterator end;
+    if (iter_ec) {
+        return std::nullopt;
+    }
+
+    for (; it != end; it.increment(iter_ec)) {
+        if (iter_ec) {
+            return std::nullopt;
+        }
+        std::error_code file_ec;
+        if (!it->is_regular_file(file_ec) || file_ec) {
+            continue;
+        }
+        const fs::path entry_path = it->path();
+        if (IsSupportedExtension(entry_path)) {
+            return entry_path;
+        }
+    }
+    return std::nullopt;
 }
 
 enum class ImageType {
@@ -169,9 +194,10 @@ private:
     void ApplyWindowBackdrop();
     void ResetView();
 
-    bool OpenImagePath(const fs::path& path, bool reset_view = true);
+    bool OpenImagePath(const fs::path& path, bool reset_view = true, bool defer_directory_scan = false);
     bool LoadImageByIndex(int index, bool reset_view = true);
     void BuildDirectoryList(const fs::path& selected_file);
+    void ScheduleDeferredDirectoryBuild(const fs::path& selected_file);
     void TryOpenInitialImage(const std::optional<std::wstring>& startup_path);
     void MoveSelection(int delta);
 
@@ -267,6 +293,8 @@ private:
     TitleButton pressed_button_ = TitleButton::None;
     bool render_timer_armed_ = false;
     ULONGLONG last_interactive_render_tick_ = 0;
+    bool deferred_directory_build_pending_ = false;
+    std::wstring deferred_directory_target_norm_;
 
     HDC layered_dc_ = nullptr;
     HBITMAP layered_bitmap_ = nullptr;
@@ -659,31 +687,53 @@ void QmiApp::BuildDirectoryList(const fs::path& selected_file) {
     if (ec) {
         target = selected_file;
     }
-    const std::wstring target_norm = NormalizePathLower(target);
-
     const fs::path directory = target.parent_path();
-    try {
-        for (const auto& entry : fs::directory_iterator(directory)) {
-            if (!entry.is_regular_file()) {
+    const std::wstring target_name_key = ToLower(target.filename().wstring());
+
+    struct DirectoryImageEntry {
+        fs::path path;
+        std::wstring sort_key;
+        bool is_target = false;
+    };
+
+    std::vector<DirectoryImageEntry> found;
+    found.reserve(256);
+
+    std::error_code iter_ec;
+    fs::directory_iterator it(directory, fs::directory_options::skip_permission_denied, iter_ec);
+    fs::directory_iterator end;
+    if (!iter_ec) {
+        for (; it != end; it.increment(iter_ec)) {
+            if (iter_ec) {
+                break;
+            }
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec) || file_ec) {
                 continue;
             }
-            if (!IsSupportedExtension(entry.path())) {
+            const fs::path entry_path = it->path();
+            if (!IsSupportedExtension(entry_path)) {
                 continue;
             }
-            images_.push_back(entry.path());
+            std::wstring name_key = ToLower(entry_path.filename().wstring());
+            found.push_back(DirectoryImageEntry{entry_path, std::move(name_key), false});
+            found.back().is_target = (found.back().sort_key == target_name_key);
         }
-    } catch (...) {
-        images_.push_back(target);
     }
 
-    std::sort(images_.begin(), images_.end(), [](const fs::path& a, const fs::path& b) {
-        return ToLower(a.filename().wstring()) < ToLower(b.filename().wstring());
+    if (found.empty()) {
+        found.push_back(DirectoryImageEntry{target, target_name_key, true});
+    }
+
+    std::sort(found.begin(), found.end(), [](const DirectoryImageEntry& a, const DirectoryImageEntry& b) {
+        return a.sort_key < b.sort_key;
     });
 
-    for (int i = 0; i < static_cast<int>(images_.size()); ++i) {
-        if (NormalizePathLower(images_[i]) == target_norm) {
+    images_.reserve(found.size());
+    for (int i = 0; i < static_cast<int>(found.size()); ++i) {
+        images_.push_back(found[i].path);
+        if (current_index_ < 0 && found[i].is_target) {
             current_index_ = i;
-            break;
         }
     }
 
@@ -694,25 +744,29 @@ void QmiApp::BuildDirectoryList(const fs::path& selected_file) {
     thumbnails_.assign(images_.size(), Thumbnail{});
 }
 
+void QmiApp::ScheduleDeferredDirectoryBuild(const fs::path& selected_file) {
+    if (!hwnd_) {
+        return;
+    }
+    deferred_directory_target_norm_ = NormalizePathLower(selected_file);
+    deferred_directory_build_pending_ = true;
+    SetTimer(hwnd_, kStartupScanTimerId, 1, nullptr);
+}
+
 void QmiApp::TryOpenInitialImage(const std::optional<std::wstring>& startup_path) {
     if (startup_path && !startup_path->empty()) {
-        if (OpenImagePath(*startup_path)) {
+        if (OpenImagePath(*startup_path, true, true)) {
             return;
         }
     }
 
-    try {
-        const fs::path cwd = fs::current_path();
-        for (const auto& entry : fs::directory_iterator(cwd)) {
-            if (!entry.is_regular_file()) {
-                continue;
-            }
-            if (IsSupportedExtension(entry.path())) {
-                OpenImagePath(entry.path());
-                return;
-            }
-        }
-    } catch (...) {
+    std::error_code ec;
+    const fs::path cwd = fs::current_path(ec);
+    if (ec) {
+        return;
+    }
+    if (const std::optional<fs::path> first_supported = FindFirstSupportedImageInDirectory(cwd); first_supported) {
+        OpenImagePath(*first_supported, true, true);
     }
 }
 
@@ -902,14 +956,22 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     return true;
 }
 
-bool QmiApp::OpenImagePath(const fs::path& path, bool reset_view) {
+bool QmiApp::OpenImagePath(const fs::path& path, bool reset_view, bool defer_directory_scan) {
     if (path.empty() || !IsSupportedExtension(path)) {
         current_error_ = L"Unsupported file format.";
         InvalidateRect(hwnd_, nullptr, FALSE);
         return false;
     }
 
-    BuildDirectoryList(path);
+    if (defer_directory_scan) {
+        images_.clear();
+        images_.push_back(path);
+        current_index_ = 0;
+        thumbnails_.assign(1, Thumbnail{});
+    } else {
+        BuildDirectoryList(path);
+    }
+
     if (images_.empty()) {
         current_error_ = L"No supported images in this folder.";
         InvalidateRect(hwnd_, nullptr, FALSE);
@@ -922,6 +984,10 @@ bool QmiApp::OpenImagePath(const fs::path& path, bool reset_view) {
 
     if (!LoadImageByIndex(current_index_, reset_view)) {
         return false;
+    }
+
+    if (defer_directory_scan) {
+        ScheduleDeferredDirectoryBuild(path);
     }
 
     SetWindowTextW(hwnd_, (L"Qmi - " + current_image_.path.filename().wstring()).c_str());
@@ -1717,6 +1783,22 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 KillTimer(hwnd_, kRenderTimerId);
                 render_timer_armed_ = false;
                 last_interactive_render_tick_ = GetTickCount64();
+                InvalidateRect(hwnd_, nullptr, FALSE);
+                return 0;
+            }
+            if (wparam == kStartupScanTimerId) {
+                KillTimer(hwnd_, kStartupScanTimerId);
+                if (!deferred_directory_build_pending_ || current_image_.type == ImageType::None) {
+                    return 0;
+                }
+                deferred_directory_build_pending_ = false;
+
+                const std::wstring current_norm = NormalizePathLower(current_image_.path);
+                if (current_norm != deferred_directory_target_norm_) {
+                    return 0;
+                }
+
+                BuildDirectoryList(current_image_.path);
                 InvalidateRect(hwnd_, nullptr, FALSE);
                 return 0;
             }

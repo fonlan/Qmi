@@ -47,6 +47,7 @@
 
 - If a command-line image path is provided, Qmi tries to open it first.
 - Otherwise, it scans the current working directory and opens the first supported image found.
+- Startup uses a fast-open path: it first decodes/displays the target image, then defers full sibling-directory indexing to a startup timer so first paint is not blocked by large folder scans.
 
 ## Build
 
@@ -76,6 +77,7 @@ Build output executable:
   - Raster: `LoadRasterBitmap`
   - SVG: `LoadSvgDocument`
   - File switch/open: `LoadImageByIndex`, `OpenImagePath`
+  - Startup deferred indexing: `TryOpenInitialImage`, `ScheduleDeferredDirectoryBuild`, `BuildDirectoryList`
 - Layout math:
   - `GetFilmStripRect`
   - `GetImageViewport`
