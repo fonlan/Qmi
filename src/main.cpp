@@ -241,6 +241,7 @@ private:
 
     D2D1_RECT_F GetImageViewport(float width, float height) const;
     D2D1_RECT_F GetFilmStripRect(float width, float height) const;
+    float GetBaseImageScale(const D2D1_RECT_F& viewport) const;
     D2D1_RECT_F GetImageDestinationRect(const D2D1_RECT_F& viewport) const;
     D2D1_RECT_F GetOpenButtonRect(const D2D1_RECT_F& viewport) const;
     TitleButtons GetTitleButtons(const D2D1_RECT_F& viewport) const;
@@ -1308,6 +1309,19 @@ D2D1_RECT_F QmiApp::GetImageViewport(float width, float height) const {
     return D2D1::RectF(left, top, right, bottom);
 }
 
+float QmiApp::GetBaseImageScale(const D2D1_RECT_F& viewport) const {
+    if (current_image_.type == ImageType::None) {
+        return 1.0f;
+    }
+
+    const float img_w = std::max(1.0f, current_image_.width);
+    const float img_h = std::max(1.0f, current_image_.height);
+    const float view_w = std::max(1.0f, viewport.right - viewport.left);
+    const float view_h = std::max(1.0f, viewport.bottom - viewport.top);
+    const float fit = std::min(view_w / img_w, view_h / img_h);
+    return std::min(1.0f, fit);
+}
+
 D2D1_RECT_F QmiApp::GetImageDestinationRect(const D2D1_RECT_F& viewport) const {
     if (current_image_.type == ImageType::None) {
         return D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1315,11 +1329,7 @@ D2D1_RECT_F QmiApp::GetImageDestinationRect(const D2D1_RECT_F& viewport) const {
 
     const float img_w = std::max(1.0f, current_image_.width);
     const float img_h = std::max(1.0f, current_image_.height);
-
-    const float view_w = std::max(1.0f, viewport.right - viewport.left);
-    const float view_h = std::max(1.0f, viewport.bottom - viewport.top);
-    const float fit = std::min(view_w / img_w, view_h / img_h);
-    const float scale = std::max(0.02f, fit * zoom_);
+    const float scale = std::max(0.02f, GetBaseImageScale(viewport) * zoom_);
     const float dest_w = img_w * scale;
     const float dest_h = img_h * scale;
 
@@ -1896,8 +1906,8 @@ void QmiApp::HandleMouseWheel(short wheel_delta, POINT screen_pt) {
 
     const float img_w = std::max(1.0f, current_image_.width);
     const float img_h = std::max(1.0f, current_image_.height);
-    const float fit = std::min((viewport.right - viewport.left) / img_w, (viewport.bottom - viewport.top) / img_h);
-    const float old_scale = fit * zoom_;
+    const float base_scale = GetBaseImageScale(viewport);
+    const float old_scale = std::max(0.02f, base_scale * zoom_);
 
     const float center_x = (viewport.left + viewport.right) * 0.5f;
     const float center_y = (viewport.top + viewport.bottom) * 0.5f;
@@ -1909,7 +1919,7 @@ void QmiApp::HandleMouseWheel(short wheel_delta, POINT screen_pt) {
     const float factor = wheel_delta > 0 ? 1.12f : (1.0f / 1.12f);
     zoom_ = Clamp(zoom_ * factor, 0.05f, 40.0f);
 
-    const float new_scale = fit * zoom_;
+    const float new_scale = std::max(0.02f, base_scale * zoom_);
     const float new_left = client_pt.x - image_space_x * new_scale;
     const float new_top = client_pt.y - image_space_y * new_scale;
     pan_x_ = new_left - (center_x - img_w * new_scale * 0.5f);

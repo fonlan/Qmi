@@ -27,6 +27,7 @@
 - Image drag/pan starts only when left click is on the currently visible image content (not just anywhere in viewport).
 - Left-click drag on non-image UI regions (outside the currently visible image, excluding title buttons/thumbnails) moves the main window.
 - Mouse wheel behavior is region-aware: cursor-anchored zoom in the image viewport, horizontal filmstrip scrolling when hovering the bottom filmstrip.
+- On open/switch/reset view, large images are scaled down to fully fit the viewport; images smaller than the viewport are shown at 100% (no automatic upscaling).
 - Dragging/zooming repaint requests are throttled to ~60 FPS (16 ms minimum interval); idle state does not run a continuous render loop.
 - Bottom filmstrip shows sibling images in current directory; click thumbnail to switch.
   - Thumbnail decode in filmstrip is progressive (per-frame budgeted), so first frame is prioritized over decoding all visible thumbnails at once.
