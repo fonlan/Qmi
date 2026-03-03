@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cwchar>
 #include <cwctype>
 #include <filesystem>
 #include <fstream>
@@ -144,6 +145,47 @@ std::wstring NormalizePathLower(const fs::path& p) {
         absolute = p;
     }
     return ToLower(absolute.lexically_normal().wstring());
+}
+
+std::wstring FormatFileSizeText(ULONGLONG bytes) {
+    constexpr std::array<const wchar_t*, 5> kUnits = {L"B", L"KB", L"MB", L"GB", L"TB"};
+    double value = static_cast<double>(bytes);
+    size_t unit_index = 0;
+    while (value >= 1024.0 && unit_index + 1 < kUnits.size()) {
+        value /= 1024.0;
+        ++unit_index;
+    }
+
+    wchar_t buffer[64] = {};
+    if (unit_index == 0) {
+        swprintf_s(buffer, L"%llu %ls", static_cast<unsigned long long>(bytes), kUnits[unit_index]);
+    } else if (value >= 100.0) {
+        swprintf_s(buffer, L"%.0f %ls", value, kUnits[unit_index]);
+    } else if (value >= 10.0) {
+        swprintf_s(buffer, L"%.1f %ls", value, kUnits[unit_index]);
+    } else {
+        swprintf_s(buffer, L"%.2f %ls", value, kUnits[unit_index]);
+    }
+    return buffer;
+}
+
+std::wstring FormatFileTimeText(const FILETIME& utc_filetime) {
+    FILETIME local_filetime{};
+    SYSTEMTIME local_time{};
+    if (!FileTimeToLocalFileTime(&utc_filetime, &local_filetime) ||
+        !FileTimeToSystemTime(&local_filetime, &local_time)) {
+        return L"-";
+    }
+
+    wchar_t buffer[64] = {};
+    swprintf_s(buffer,
+               L"%04u-%02u-%02u %02u:%02u",
+               local_time.wYear,
+               local_time.wMonth,
+               local_time.wDay,
+               local_time.wHour,
+               local_time.wMinute);
+    return buffer;
 }
 
 std::wstring GetModulePath() {
@@ -796,6 +838,8 @@ private:
     void CreateBrushes();
     void ApplyWindowBackdrop();
     void ResetView();
+    void UpdateCurrentImageInfo();
+    void ClearCurrentImageInfo();
 
     bool OpenImagePath(const fs::path& path, bool reset_view = true, bool defer_directory_scan = false);
     bool LoadImageByIndex(int index, bool reset_view = true);
@@ -831,6 +875,7 @@ private:
     void Render();
     void DrawImageRegion(const D2D1_RECT_F& viewport);
     void DrawFilmStrip(const D2D1_RECT_F& strip_rect);
+    void DrawTopInfoBar(const TitleButtons& buttons);
     void DrawTitleButtons(const TitleButtons& buttons);
     void DrawEdgeNavButtons(const D2D1_RECT_F& viewport);
     void DrawOpenButton(const D2D1_RECT_F& viewport);
@@ -885,6 +930,7 @@ private:
     ComPtr<IDWriteFactory> dwrite_factory_;
     ComPtr<IDWriteTextFormat> text_format_;
     ComPtr<IDWriteTextFormat> small_text_format_;
+    ComPtr<IDWriteTextFormat> info_text_format_;
 
     ComPtr<ID2D1SolidColorBrush> brush_text_;
     ComPtr<ID2D1SolidColorBrush> brush_panel_;
@@ -903,6 +949,7 @@ private:
     LoadedImage current_image_;
     int current_index_ = -1;
     std::wstring current_error_;
+    std::wstring current_image_info_;
 
     float zoom_ = 1.0f;
     float pan_x_ = 0.0f;
@@ -1028,6 +1075,15 @@ bool QmiApp::InitDeviceIndependentResources() {
     small_text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
     small_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     small_text_format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+
+    if (FAILED(dwrite_factory_->CreateTextFormat(
+            L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0f,
+            L"zh-CN", &info_text_format_))) {
+        return false;
+    }
+    info_text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    info_text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    info_text_format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 
     return true;
 }
@@ -2030,6 +2086,38 @@ HRESULT QmiApp::LoadSvgThumbnailBitmap(const fs::path& path,
     return S_OK;
 }
 
+void QmiApp::ClearCurrentImageInfo() {
+    current_image_info_.clear();
+}
+
+void QmiApp::UpdateCurrentImageInfo() {
+    if (current_image_.type == ImageType::None || current_image_.path.empty()) {
+        ClearCurrentImageInfo();
+        return;
+    }
+
+    std::wstring file_name = current_image_.path.filename().wstring();
+    if (file_name.empty()) {
+        file_name = current_image_.path.wstring();
+    }
+
+    const int pixel_w = std::max(1, static_cast<int>(std::lround(current_image_.width)));
+    const int pixel_h = std::max(1, static_cast<int>(std::lround(current_image_.height)));
+    const std::wstring resolution = std::to_wstring(pixel_w) + L"x" + std::to_wstring(pixel_h);
+
+    std::wstring file_size = L"-";
+    std::wstring modified_time = L"-";
+    WIN32_FILE_ATTRIBUTE_DATA file_data{};
+    if (GetFileAttributesExW(current_image_.path.c_str(), GetFileExInfoStandard, &file_data)) {
+        const ULONGLONG bytes =
+            (static_cast<ULONGLONG>(file_data.nFileSizeHigh) << 32u) | static_cast<ULONGLONG>(file_data.nFileSizeLow);
+        file_size = FormatFileSizeText(bytes);
+        modified_time = FormatFileTimeText(file_data.ftLastWriteTime);
+    }
+
+    current_image_info_ = file_name + L" | " + resolution + L" | " + file_size + L" | " + modified_time;
+}
+
 bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     if (index < 0 || index >= static_cast<int>(images_.size())) {
         return false;
@@ -2078,6 +2166,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     }
     current_index_ = index;
     current_error_.clear();
+    UpdateCurrentImageInfo();
     hover_open_button_ = false;
     pressed_open_button_ = false;
     hover_edge_nav_button_ = EdgeNavButton::None;
@@ -2490,6 +2579,29 @@ void QmiApp::DrawButtonGlyph(TitleButton button, const RECT& rect) {
     d2d_context_->SetAntialiasMode(previous_aa);
 }
 
+void QmiApp::DrawTopInfoBar(const TitleButtons& buttons) {
+    if (!d2d_context_ || !brush_text_ || !info_text_format_ || current_image_info_.empty()) {
+        return;
+    }
+
+    const float left = 10.0f;
+    const float top = static_cast<float>(buttons.min_rect.top);
+    const float right = static_cast<float>(buttons.min_rect.left) - 8.0f;
+    const float bottom = static_cast<float>(buttons.min_rect.bottom);
+    if (right <= left + 24.0f) {
+        return;
+    }
+
+    const D2D1_RECT_F panel_rect = D2D1::RectF(left, top, right, bottom);
+    const D2D1_RECT_F text_rect = D2D1::RectF(panel_rect.left + 10.0f, panel_rect.top, panel_rect.right - 10.0f, panel_rect.bottom);
+    d2d_context_->DrawTextW(current_image_info_.c_str(),
+                            static_cast<UINT32>(current_image_info_.size()),
+                            info_text_format_.Get(),
+                            text_rect,
+                            brush_text_.Get(),
+                            D2D1_DRAW_TEXT_OPTIONS_CLIP);
+}
+
 void QmiApp::DrawTitleButtons(const TitleButtons& buttons) {
     if (!d2d_context_ || !brush_hover_ || !brush_close_hover_) {
         return;
@@ -2770,7 +2882,9 @@ void QmiApp::Render() {
     }
 
     DrawFilmStrip(strip);
-    DrawTitleButtons(GetTitleButtons());
+    const TitleButtons title_buttons = GetTitleButtons();
+    DrawTopInfoBar(title_buttons);
+    DrawTitleButtons(title_buttons);
 
     if (!current_error_.empty()) {
         DrawMessageOverlay(current_error_);

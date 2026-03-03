@@ -23,6 +23,7 @@
 - No top title bar is drawn.
 - Minimize / maximize / close buttons are custom-drawn and anchored flush to the window's top-right edge (no top/right gap).
 - Title-button glyphs are styled close to native Windows caption icons (minimize line, maximize square, restore overlap, close X).
+- The left side of the same top control row is used as an info bar, showing current image file name, resolution, file size, and last-modified time, without an extra filled background block.
 - Image viewport has zero outer margin/gap (flush to window content area) for a truly borderless look.
 - Areas outside the image viewport are rendered as translucent overlays/panels with alpha `200/255` (~78%).
 - Main window uses `WS_EX_LAYERED` with per-pixel alpha composition via `UpdateLayeredWindow`.
@@ -106,6 +107,7 @@ Build output executable:
   - WebP built-in decode: `LoadWebpBitmap`
   - SVG: `LoadSvgDocument`
   - File switch/open: `LoadImageByIndex`, `OpenImagePath`
+  - Current image metadata text refresh: `UpdateCurrentImageInfo`, `ClearCurrentImageInfo`
   - Startup deferred indexing: `TryOpenInitialImage`, `ScheduleDeferredDirectoryBuild`, `BuildDirectoryList`
 - Layout math:
   - `GetFilmStripRect`
@@ -122,6 +124,7 @@ Build output executable:
   - `DrawEdgeNavButtons`
   - `DrawOpenButton`
   - `DrawFilmStrip` (progressive thumbnail loading with per-frame decode budget)
+  - `DrawTopInfoBar`
   - `DrawTitleButtons`
 - Input:
   - Zoom: `HandleMouseWheel`
