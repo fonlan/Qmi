@@ -391,7 +391,7 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
     const int client_height = std::max(1, static_cast<int>(rc.bottom - rc.top));
 
     constexpr int kOuterPadding = 20;
-    constexpr int kNavWidth = 130;
+    constexpr int kNavWidth = 112;
     constexpr int kNavDividerGap = 12;
     constexpr int kDividerWidth = 2;
     constexpr int kDividerPanelGap = 12;
