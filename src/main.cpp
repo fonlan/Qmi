@@ -72,8 +72,9 @@ constexpr wchar_t kSettingsClassName[] = L"QmiSettingsWindowClass";
 constexpr int kAppIconResourceId = 101;
 
 constexpr UINT kMenuOpenFile = 1001;
-constexpr UINT kMenuSettings = 1002;
-constexpr UINT kMenuExit = 1003;
+constexpr UINT kMenuCopyImage = 1002;
+constexpr UINT kMenuSettings = 1003;
+constexpr UINT kMenuExit = 1004;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 constexpr UINT_PTR kAnimationTimerId = 3;
@@ -108,6 +109,17 @@ constexpr float kThumbnailCellOpacity = 0.58f;
 template <typename T>
 T Clamp(T v, T lo, T hi) {
     return std::max(lo, std::min(v, hi));
+}
+
+std::uint8_t UnpremultiplyChannel(std::uint8_t value, std::uint8_t alpha) {
+    if (alpha == 0) {
+        return 0;
+    }
+    if (alpha == 255) {
+        return value;
+    }
+    const unsigned result = (static_cast<unsigned>(value) * 255u + alpha / 2u) / alpha;
+    return static_cast<std::uint8_t>(std::min(255u, result));
 }
 
 struct AssociationTypeOption {
@@ -992,6 +1004,14 @@ private:
     void ShowContextMenu(POINT screen_pt);
     void OpenFileDialog();
     void OpenSettingsWindow();
+    bool CopyCurrentImageToClipboard();
+    HRESULT ExtractCurrentImagePixels(UINT32* out_width,
+                                      UINT32* out_height,
+                                      std::vector<std::uint8_t>* out_pixels);
+    HRESULT ReadBitmapPixels(ID2D1Bitmap1* source_bitmap,
+                             UINT32* out_width,
+                             UINT32* out_height,
+                             std::vector<std::uint8_t>* out_pixels);
     void RequestRender(bool interactive = false);
 
     LRESULT HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam);
@@ -3191,13 +3211,215 @@ void QmiApp::OpenSettingsWindow() {
     }
 }
 
+HRESULT QmiApp::ReadBitmapPixels(ID2D1Bitmap1* source_bitmap,
+                                 UINT32* out_width,
+                                 UINT32* out_height,
+                                 std::vector<std::uint8_t>* out_pixels) {
+    if (!source_bitmap || !d2d_context_ || !out_width || !out_height || !out_pixels) {
+        return E_POINTER;
+    }
+
+    *out_width = 0;
+    *out_height = 0;
+    out_pixels->clear();
+
+    const D2D1_SIZE_U pixel_size = source_bitmap->GetPixelSize();
+    if (pixel_size.width == 0 || pixel_size.height == 0) {
+        return E_FAIL;
+    }
+
+    const size_t row_bytes = static_cast<size_t>(pixel_size.width) * 4u;
+    if (row_bytes / 4u != static_cast<size_t>(pixel_size.width)) {
+        return E_FAIL;
+    }
+    if (row_bytes > std::numeric_limits<size_t>::max() / static_cast<size_t>(pixel_size.height)) {
+        return E_FAIL;
+    }
+    const size_t pixel_bytes = row_bytes * static_cast<size_t>(pixel_size.height);
+
+    const D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+
+    ComPtr<ID2D1Bitmap1> cpu_bitmap;
+    HRESULT hr = d2d_context_->CreateBitmap(pixel_size, nullptr, 0, &props, &cpu_bitmap);
+    if (FAILED(hr) || !cpu_bitmap) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    hr = cpu_bitmap->CopyFromBitmap(nullptr, source_bitmap, nullptr);
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    D2D1_MAPPED_RECT mapped{};
+    hr = cpu_bitmap->Map(D2D1_MAP_OPTIONS_READ, &mapped);
+    if (FAILED(hr) || !mapped.bits) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    out_pixels->resize(pixel_bytes);
+    for (UINT32 y = 0; y < pixel_size.height; ++y) {
+        memcpy(out_pixels->data() + static_cast<size_t>(y) * row_bytes,
+               mapped.bits + static_cast<size_t>(y) * mapped.pitch,
+               row_bytes);
+    }
+    cpu_bitmap->Unmap();
+
+    *out_width = pixel_size.width;
+    *out_height = pixel_size.height;
+    return S_OK;
+}
+
+HRESULT QmiApp::ExtractCurrentImagePixels(UINT32* out_width,
+                                          UINT32* out_height,
+                                          std::vector<std::uint8_t>* out_pixels) {
+    if (!out_width || !out_height || !out_pixels) {
+        return E_POINTER;
+    }
+    *out_width = 0;
+    *out_height = 0;
+    out_pixels->clear();
+
+    if (current_image_.type == ImageType::Raster && current_image_.raster) {
+        return ReadBitmapPixels(current_image_.raster.Get(), out_width, out_height, out_pixels);
+    }
+
+    if (current_image_.type != ImageType::Svg || !current_image_.svg || !d2d_context_ || !d2d_context5_) {
+        return E_FAIL;
+    }
+
+    const double width_d = std::max(1.0, static_cast<double>(current_image_.width));
+    const double height_d = std::max(1.0, static_cast<double>(current_image_.height));
+    if (width_d > static_cast<double>(std::numeric_limits<UINT32>::max()) ||
+        height_d > static_cast<double>(std::numeric_limits<UINT32>::max())) {
+        return E_FAIL;
+    }
+
+    const UINT32 target_width = std::max(1u, static_cast<UINT32>(std::lround(width_d)));
+    const UINT32 target_height = std::max(1u, static_cast<UINT32>(std::lround(height_d)));
+    const D2D1_BITMAP_PROPERTIES1 target_props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_TARGET, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+
+    ComPtr<ID2D1Bitmap1> target_bitmap;
+    HRESULT hr = d2d_context_->CreateBitmap(D2D1::SizeU(target_width, target_height), nullptr, 0, &target_props, &target_bitmap);
+    if (FAILED(hr) || !target_bitmap) {
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    ComPtr<ID2D1Image> previous_target;
+    d2d_context_->GetTarget(&previous_target);
+    D2D1_MATRIX_3X2_F previous_transform = D2D1::Matrix3x2F::Identity();
+    d2d_context_->GetTransform(&previous_transform);
+
+    d2d_context_->SetTarget(target_bitmap.Get());
+    d2d_context_->BeginDraw();
+    d2d_context_->SetTransform(D2D1::Matrix3x2F::Identity());
+    d2d_context_->Clear(D2D1::ColorF(0, 0.0f));
+    d2d_context5_->DrawSvgDocument(current_image_.svg.Get());
+    hr = d2d_context_->EndDraw();
+
+    d2d_context_->SetTransform(previous_transform);
+    d2d_context_->SetTarget(previous_target.Get());
+
+    if (FAILED(hr)) {
+        return hr;
+    }
+    return ReadBitmapPixels(target_bitmap.Get(), out_width, out_height, out_pixels);
+}
+
+bool QmiApp::CopyCurrentImageToClipboard() {
+    UINT32 width = 0;
+    UINT32 height = 0;
+    std::vector<std::uint8_t> pixels;
+    if (FAILED(ExtractCurrentImagePixels(&width, &height, &pixels)) || width == 0 || height == 0) {
+        return false;
+    }
+
+    const size_t row_bytes = static_cast<size_t>(width) * 4u;
+    if (row_bytes / 4u != static_cast<size_t>(width)) {
+        return false;
+    }
+    if (row_bytes > std::numeric_limits<size_t>::max() / static_cast<size_t>(height)) {
+        return false;
+    }
+    const size_t pixel_bytes = row_bytes * static_cast<size_t>(height);
+    if (pixels.size() < pixel_bytes) {
+        return false;
+    }
+    if (width > static_cast<UINT32>(std::numeric_limits<LONG>::max()) ||
+        height > static_cast<UINT32>(std::numeric_limits<LONG>::max()) ||
+        pixel_bytes > static_cast<size_t>(std::numeric_limits<DWORD>::max())) {
+        return false;
+    }
+
+    for (size_t i = 0; i + 3 < pixel_bytes; i += 4) {
+        const std::uint8_t alpha = pixels[i + 3];
+        pixels[i + 0] = UnpremultiplyChannel(pixels[i + 0], alpha);
+        pixels[i + 1] = UnpremultiplyChannel(pixels[i + 1], alpha);
+        pixels[i + 2] = UnpremultiplyChannel(pixels[i + 2], alpha);
+    }
+
+    const size_t total_bytes = sizeof(BITMAPINFOHEADER) + pixel_bytes;
+    if (total_bytes < pixel_bytes) {
+        return false;
+    }
+
+    HGLOBAL dib_handle = GlobalAlloc(GMEM_MOVEABLE, total_bytes);
+    if (!dib_handle) {
+        return false;
+    }
+
+    void* dib_memory = GlobalLock(dib_handle);
+    if (!dib_memory) {
+        GlobalFree(dib_handle);
+        return false;
+    }
+
+    auto* header = static_cast<BITMAPINFOHEADER*>(dib_memory);
+    ZeroMemory(header, sizeof(*header));
+    header->biSize = sizeof(BITMAPINFOHEADER);
+    header->biWidth = static_cast<LONG>(width);
+    header->biHeight = static_cast<LONG>(height);
+    header->biPlanes = 1;
+    header->biBitCount = 32;
+    header->biCompression = BI_RGB;
+    header->biSizeImage = static_cast<DWORD>(pixel_bytes);
+
+    auto* dib_pixels = reinterpret_cast<std::uint8_t*>(header + 1);
+    for (UINT32 y = 0; y < height; ++y) {
+        const size_t src_y = static_cast<size_t>(height - 1 - y);
+        memcpy(dib_pixels + static_cast<size_t>(y) * row_bytes, pixels.data() + src_y * row_bytes, row_bytes);
+    }
+    GlobalUnlock(dib_handle);
+
+    if (!OpenClipboard(hwnd_)) {
+        GlobalFree(dib_handle);
+        return false;
+    }
+
+    bool copied = false;
+    if (EmptyClipboard() && SetClipboardData(CF_DIB, dib_handle)) {
+        copied = true;
+        dib_handle = nullptr;
+    }
+
+    CloseClipboard();
+    if (dib_handle) {
+        GlobalFree(dib_handle);
+    }
+    return copied;
+}
+
 void QmiApp::ShowContextMenu(POINT screen_pt) {
     HMENU menu = CreatePopupMenu();
     if (!menu) {
         return;
     }
 
+    const bool can_copy_image = IsRenderableImageType(current_image_.type);
     AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00...");
+    AppendMenuW(menu, can_copy_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImage, L"\u590d\u5236\u56fe\u7247");
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u8bbe\u7f6e...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa");
@@ -3209,6 +3431,9 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     switch (cmd) {
         case kMenuOpenFile:
             OpenFileDialog();
+            break;
+        case kMenuCopyImage:
+            CopyCurrentImageToClipboard();
             break;
         case kMenuSettings:
             OpenSettingsWindow();
@@ -3660,6 +3885,9 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             switch (LOWORD(wparam)) {
                 case kMenuOpenFile:
                     OpenFileDialog();
+                    return 0;
+                case kMenuCopyImage:
+                    CopyCurrentImageToClipboard();
                     return 0;
                 case kMenuSettings:
                     OpenSettingsWindow();
