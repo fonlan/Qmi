@@ -79,6 +79,10 @@ constexpr UINT kMenuSettings = 1005;
 constexpr UINT kMenuExit = 1006;
 constexpr UINT kMenuOpenContainingFolder = 1007;
 constexpr UINT kMenuCopyImagePath = 1008;
+constexpr UINT kMenuRotateClockwise = 1009;
+constexpr UINT kMenuRotateCounterclockwise = 1010;
+constexpr UINT kMenuFlipHorizontal = 1011;
+constexpr UINT kMenuFlipVertical = 1012;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 constexpr UINT_PTR kAnimationTimerId = 3;
@@ -1019,6 +1023,14 @@ private:
     bool CopyCurrentFileToClipboard();
     bool CopyCurrentImagePathToClipboard();
     bool MoveCurrentFileToRecycleBin();
+    void ResetImageTransform();
+    void ApplyImageTransform(int op_m11, int op_m12, int op_m21, int op_m22);
+    void RotateImageClockwise();
+    void RotateImageCounterclockwise();
+    void ToggleImageFlipHorizontal();
+    void ToggleImageFlipVertical();
+    D2D1_SIZE_F GetTransformedImageSize() const;
+    D2D1_MATRIX_3X2_F GetImageTransformMatrix(const D2D1_POINT_2F& center) const;
     HRESULT ExtractCurrentImagePixels(UINT32* out_width,
                                       UINT32* out_height,
                                       std::vector<std::uint8_t>* out_pixels);
@@ -1083,6 +1095,10 @@ private:
     float zoom_ = 1.0f;
     float pan_x_ = 0.0f;
     float pan_y_ = 0.0f;
+    int image_transform_m11_ = 1;
+    int image_transform_m12_ = 0;
+    int image_transform_m21_ = 0;
+    int image_transform_m22_ = 1;
     bool dblclick_restore_available_ = false;
     float dblclick_restore_scale_ = 1.0f;
     std::wstring dblclick_restore_image_norm_;
@@ -1551,6 +1567,77 @@ void QmiApp::ResetView() {
     pan_x_ = 0.0f;
     pan_y_ = 0.0f;
     ClearDoubleClickZoomRestore();
+}
+
+void QmiApp::ResetImageTransform() {
+    image_transform_m11_ = 1;
+    image_transform_m12_ = 0;
+    image_transform_m21_ = 0;
+    image_transform_m22_ = 1;
+}
+
+void QmiApp::ApplyImageTransform(int op_m11, int op_m12, int op_m21, int op_m22) {
+    const int m11 = image_transform_m11_ * op_m11 + image_transform_m12_ * op_m21;
+    const int m12 = image_transform_m11_ * op_m12 + image_transform_m12_ * op_m22;
+    const int m21 = image_transform_m21_ * op_m11 + image_transform_m22_ * op_m21;
+    const int m22 = image_transform_m21_ * op_m12 + image_transform_m22_ * op_m22;
+    image_transform_m11_ = m11;
+    image_transform_m12_ = m12;
+    image_transform_m21_ = m21;
+    image_transform_m22_ = m22;
+    ClearDoubleClickZoomRestore();
+}
+
+void QmiApp::RotateImageClockwise() {
+    if (!IsRenderableImageType(current_image_.type)) {
+        return;
+    }
+    ApplyImageTransform(0, 1, -1, 0);
+    RequestRender();
+}
+
+void QmiApp::RotateImageCounterclockwise() {
+    if (!IsRenderableImageType(current_image_.type)) {
+        return;
+    }
+    ApplyImageTransform(0, -1, 1, 0);
+    RequestRender();
+}
+
+void QmiApp::ToggleImageFlipHorizontal() {
+    if (!IsRenderableImageType(current_image_.type)) {
+        return;
+    }
+    ApplyImageTransform(-1, 0, 0, 1);
+    RequestRender();
+}
+
+void QmiApp::ToggleImageFlipVertical() {
+    if (!IsRenderableImageType(current_image_.type)) {
+        return;
+    }
+    ApplyImageTransform(1, 0, 0, -1);
+    RequestRender();
+}
+
+D2D1_SIZE_F QmiApp::GetTransformedImageSize() const {
+    const float src_w = std::max(1.0f, current_image_.width);
+    const float src_h = std::max(1.0f, current_image_.height);
+    const float transformed_w = std::fabs(static_cast<float>(image_transform_m11_)) * src_w +
+                                std::fabs(static_cast<float>(image_transform_m21_)) * src_h;
+    const float transformed_h = std::fabs(static_cast<float>(image_transform_m12_)) * src_w +
+                                std::fabs(static_cast<float>(image_transform_m22_)) * src_h;
+    return D2D1::SizeF(std::max(1.0f, transformed_w), std::max(1.0f, transformed_h));
+}
+
+D2D1_MATRIX_3X2_F QmiApp::GetImageTransformMatrix(const D2D1_POINT_2F& center) const {
+    const float m11 = static_cast<float>(image_transform_m11_);
+    const float m12 = static_cast<float>(image_transform_m12_);
+    const float m21 = static_cast<float>(image_transform_m21_);
+    const float m22 = static_cast<float>(image_transform_m22_);
+    const float dx = center.x - (center.x * m11 + center.y * m21);
+    const float dy = center.y - (center.x * m12 + center.y * m22);
+    return D2D1::Matrix3x2F(m11, m12, m21, m22, dx, dy);
 }
 
 void QmiApp::ClearAnimationState() {
@@ -2395,6 +2482,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     }
     current_index_ = index;
     UpdateCurrentImageInfo();
+    ResetImageTransform();
     hover_open_button_ = false;
     pressed_open_button_ = false;
     hover_edge_nav_button_ = EdgeNavButton::None;
@@ -2527,8 +2615,9 @@ float QmiApp::GetBaseImageScale(const D2D1_RECT_F& viewport) const {
     }
 
     const D2D1_RECT_F fit_viewport = GetImageFitViewport(viewport);
-    const float img_w = std::max(1.0f, current_image_.width);
-    const float img_h = std::max(1.0f, current_image_.height);
+    const D2D1_SIZE_F transformed_size = GetTransformedImageSize();
+    const float img_w = transformed_size.width;
+    const float img_h = transformed_size.height;
     const float view_w = std::max(1.0f, fit_viewport.right - fit_viewport.left);
     const float view_h = std::max(1.0f, fit_viewport.bottom - fit_viewport.top);
     const float fit = std::min(view_w / img_w, view_h / img_h);
@@ -2540,8 +2629,9 @@ D2D1_RECT_F QmiApp::GetImageDestinationRect(const D2D1_RECT_F& viewport) const {
         return D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
     }
 
-    const float img_w = std::max(1.0f, current_image_.width);
-    const float img_h = std::max(1.0f, current_image_.height);
+    const D2D1_SIZE_F transformed_size = GetTransformedImageSize();
+    const float img_w = transformed_size.width;
+    const float img_h = transformed_size.height;
     const float scale = std::max(0.02f, GetBaseImageScale(viewport) * zoom_);
     const float dest_w = img_w * scale;
     const float dest_h = img_h * scale;
@@ -3012,23 +3102,38 @@ void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
     }
 
     const D2D1_RECT_F dest = GetImageDestinationRect(viewport);
-    const float img_w = std::max(1.0f, current_image_.width);
-    const float img_h = std::max(1.0f, current_image_.height);
+    const D2D1_SIZE_F transformed_size = GetTransformedImageSize();
+    const float transformed_w = std::max(1.0f, transformed_size.width);
+    const float transformed_h = std::max(1.0f, transformed_size.height);
     const float dest_w = std::max(1.0f, dest.right - dest.left);
     const float dest_h = std::max(1.0f, dest.bottom - dest.top);
-    const float scale = std::min(dest_w / img_w, dest_h / img_h);
+    const float scale = std::min(dest_w / transformed_w, dest_h / transformed_h);
+    const float source_w = std::max(1.0f, current_image_.width);
+    const float source_h = std::max(1.0f, current_image_.height);
+    const float center_x = (dest.left + dest.right) * 0.5f;
+    const float center_y = (dest.top + dest.bottom) * 0.5f;
+    const float draw_w = source_w * scale;
+    const float draw_h = source_h * scale;
+    const D2D1_RECT_F draw_rect =
+        D2D1::RectF(center_x - draw_w * 0.5f, center_y - draw_h * 0.5f, center_x + draw_w * 0.5f, center_y + draw_h * 0.5f);
 
     d2d_context_->PushAxisAlignedClip(viewport, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+    const D2D1_POINT_2F center = D2D1::Point2F(center_x, center_y);
+    const D2D1_MATRIX_3X2_F image_transform = GetImageTransformMatrix(center);
 
     if (current_image_.type == ImageType::Raster && current_image_.raster) {
+        D2D1_MATRIX_3X2_F prev{};
+        d2d_context_->GetTransform(&prev);
+        d2d_context_->SetTransform(image_transform);
         const D2D1_INTERPOLATION_MODE interp =
             smooth_sampling_ ? D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC : D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR;
-        d2d_context_->DrawBitmap(current_image_.raster.Get(), dest, 1.0f, interp);
+        d2d_context_->DrawBitmap(current_image_.raster.Get(), draw_rect, 1.0f, interp);
+        d2d_context_->SetTransform(prev);
     } else if (current_image_.type == ImageType::Svg && current_image_.svg && d2d_context5_) {
         D2D1_MATRIX_3X2_F prev{};
         d2d_context_->GetTransform(&prev);
-        d2d_context_->SetTransform(
-            D2D1::Matrix3x2F::Scale(scale, scale, D2D1::Point2F(0.0f, 0.0f)) * D2D1::Matrix3x2F::Translation(dest.left, dest.top));
+        d2d_context_->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale, D2D1::Point2F(0.0f, 0.0f)) *
+                                   D2D1::Matrix3x2F::Translation(draw_rect.left, draw_rect.top) * image_transform);
         d2d_context5_->DrawSvgDocument(current_image_.svg.Get());
         d2d_context_->SetTransform(prev);
     }
@@ -3879,6 +3984,7 @@ bool QmiApp::MoveCurrentFileToRecycleBin() {
     zoom_ = 1.0f;
     pan_x_ = 0.0f;
     pan_y_ = 0.0f;
+    ResetImageTransform();
 
     if (hwnd_) {
         SetWindowTextW(hwnd_, L"Qmi");
@@ -3898,6 +4004,7 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     const bool can_copy_path = can_copy_file;
     const bool can_delete_file = can_copy_file;
     const bool can_open_containing_folder = can_copy_file;
+    const bool can_transform_image = IsRenderableImageType(current_image_.type);
     AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00\u56fe\u7247");
     AppendMenuW(menu,
                 can_open_containing_folder ? MF_STRING : (MF_STRING | MF_GRAYED),
@@ -3907,6 +4014,24 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     AppendMenuW(menu, can_copy_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyFile, L"\u590d\u5236\u6587\u4ef6");
     AppendMenuW(menu, can_copy_path ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImagePath, L"\u590d\u5236\u56fe\u7247\u8def\u5f84");
     AppendMenuW(menu, can_delete_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuDeleteFile, L"\u5220\u9664\u6587\u4ef6");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu,
+                can_transform_image ? MF_STRING : (MF_STRING | MF_GRAYED),
+                kMenuRotateClockwise,
+                L"\u987a\u65f6\u9488\u65cb\u8f6c 90\u5ea6");
+    AppendMenuW(menu,
+                can_transform_image ? MF_STRING : (MF_STRING | MF_GRAYED),
+                kMenuRotateCounterclockwise,
+                L"\u9006\u65f6\u9488\u65cb\u8f6c 90\u5ea6");
+    AppendMenuW(menu,
+                can_transform_image ? MF_STRING : (MF_STRING | MF_GRAYED),
+                kMenuFlipHorizontal,
+                L"\u6c34\u5e73\u955c\u50cf\u7ffb\u8f6c");
+    AppendMenuW(menu,
+                can_transform_image ? MF_STRING : (MF_STRING | MF_GRAYED),
+                kMenuFlipVertical,
+                L"\u5782\u76f4\u955c\u50cf\u7ffb\u8f6c");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u7a0b\u5e8f\u8bbe\u7f6e");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa\u7a0b\u5e8f");
@@ -3943,6 +4068,18 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
                             L"Qmi",
                             MB_ICONERROR | MB_OK);
             }
+            break;
+        case kMenuRotateClockwise:
+            RotateImageClockwise();
+            break;
+        case kMenuRotateCounterclockwise:
+            RotateImageCounterclockwise();
+            break;
+        case kMenuFlipHorizontal:
+            ToggleImageFlipHorizontal();
+            break;
+        case kMenuFlipVertical:
+            ToggleImageFlipVertical();
             break;
         case kMenuSettings:
             OpenSettingsWindow();
@@ -4035,8 +4172,9 @@ void QmiApp::HandleMouseWheel(short wheel_delta, POINT screen_pt) {
         return;
     }
 
-    const float img_w = std::max(1.0f, current_image_.width);
-    const float img_h = std::max(1.0f, current_image_.height);
+    const D2D1_SIZE_F transformed_size = GetTransformedImageSize();
+    const float img_w = transformed_size.width;
+    const float img_h = transformed_size.height;
     const float base_scale = GetBaseImageScale(viewport);
     const float old_scale = std::max(0.02f, base_scale * zoom_);
     const D2D1_RECT_F fit_viewport = GetImageFitViewport(viewport);
@@ -4105,8 +4243,9 @@ void QmiApp::HandleImageDoubleClick(POINT client_pt) {
         ClearDoubleClickZoomRestore();
     }
 
-    const float img_w = std::max(1.0f, current_image_.width);
-    const float img_h = std::max(1.0f, current_image_.height);
+    const D2D1_SIZE_F transformed_size = GetTransformedImageSize();
+    const float img_w = transformed_size.width;
+    const float img_h = transformed_size.height;
     const D2D1_RECT_F fit_viewport = GetImageFitViewport(viewport);
 
     const float center_x = (fit_viewport.left + fit_viewport.right) * 0.5f;
@@ -4476,6 +4615,18 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                                     L"Qmi",
                                     MB_ICONERROR | MB_OK);
                     }
+                    return 0;
+                case kMenuRotateClockwise:
+                    RotateImageClockwise();
+                    return 0;
+                case kMenuRotateCounterclockwise:
+                    RotateImageCounterclockwise();
+                    return 0;
+                case kMenuFlipHorizontal:
+                    ToggleImageFlipHorizontal();
+                    return 0;
+                case kMenuFlipVertical:
+                    ToggleImageFlipVertical();
                     return 0;
                 case kMenuSettings:
                     OpenSettingsWindow();
