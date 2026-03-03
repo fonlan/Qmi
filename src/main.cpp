@@ -202,10 +202,12 @@ void InitializeShortcutsTable(HWND table_hwnd) {
         const wchar_t* key = L"";
         const wchar_t* action = L"";
     };
-    constexpr std::array<ShortcutRow, 3> kRows = {{
+    constexpr std::array<ShortcutRow, 5> kRows = {{
         {L"Left / Up", L"\u4e0a\u4e00\u5f20\u56fe\u7247"},
         {L"Right / Down", L"\u4e0b\u4e00\u5f20\u56fe\u7247"},
         {L"0", L"\u91cd\u7f6e\u7f29\u653e\u4e0e\u5e73\u79fb"},
+        {L"Ctrl + C", L"\u590d\u5236\u5f53\u524d\u56fe\u7247"},
+        {L"Delete", L"\u5220\u9664\u5f53\u524d\u6587\u4ef6\uff08\u79fb\u5165\u56de\u6536\u7ad9\uff09"},
     }};
 
     for (int i = 0; i < static_cast<int>(kRows.size()); ++i) {
@@ -4593,8 +4595,20 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             return 0;
         }
 
-        case WM_KEYDOWN:
-            if (wparam == VK_RIGHT || wparam == VK_DOWN) {
+        case WM_KEYDOWN: {
+            const bool ctrl_down = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            if (ctrl_down && wparam == 'C') {
+                if (IsRenderableImageType(current_image_.type)) {
+                    CopyCurrentImageToClipboard();
+                }
+            } else if (wparam == VK_DELETE) {
+                if (!current_image_.path.empty() && !MoveCurrentFileToRecycleBin()) {
+                    MessageBoxW(hwnd_,
+                                L"\u5220\u9664\u6587\u4ef6\u5931\u8d25\uff0c\u6587\u4ef6\u53ef\u80fd\u4e0d\u5b58\u5728\u6216\u65e0\u6cd5\u79fb\u5165\u56de\u6536\u7ad9\u3002",
+                                L"Qmi",
+                                MB_ICONERROR | MB_OK);
+                }
+            } else if (wparam == VK_RIGHT || wparam == VK_DOWN) {
                 MoveSelection(1);
             } else if (wparam == VK_LEFT || wparam == VK_UP) {
                 MoveSelection(-1);
@@ -4603,6 +4617,7 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 RequestRender();
             }
             return 0;
+        }
 
         case WM_TIMER:
             if (wparam == kAnimationTimerId) {
