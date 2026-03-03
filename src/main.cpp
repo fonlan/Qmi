@@ -3008,7 +3008,11 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
     }
 
     const int end = std::min(static_cast<int>(images_.size()), start + slots);
-    float x = strip_rect.left + padding;
+    const int visible_count = std::max(0, end - start);
+    const float inner_left = strip_rect.left + padding;
+    const float inner_width = std::max(0.0f, (strip_rect.right - strip_rect.left) - padding * 2.0f);
+    const float content_width = (visible_count > 0) ? (visible_count * item_w + (visible_count - 1) * gap) : 0.0f;
+    float x = inner_left + std::max(0.0f, (inner_width - content_width) * 0.5f);
     int remaining_decode_budget = kThumbnailDecodeBudgetPerFrame;
     bool has_pending_visible_thumbnail = false;
 
