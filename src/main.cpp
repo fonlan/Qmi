@@ -216,6 +216,7 @@ private:
     void DrawImageRegion(const D2D1_RECT_F& viewport);
     void DrawFilmStrip(const D2D1_RECT_F& strip_rect);
     void DrawTitleButtons(const TitleButtons& buttons);
+    void DrawOpenButton(const D2D1_RECT_F& viewport);
     void DrawButtonGlyph(TitleButton button, const RECT& rect);
     void DrawCenteredText(const std::wstring& text, const D2D1_RECT_F& rect, IDWriteTextFormat* format);
     void DrawMessageOverlay(const std::wstring& text);
@@ -223,8 +224,10 @@ private:
     D2D1_RECT_F GetImageViewport(float width, float height) const;
     D2D1_RECT_F GetFilmStripRect(float width, float height) const;
     D2D1_RECT_F GetImageDestinationRect(const D2D1_RECT_F& viewport) const;
+    D2D1_RECT_F GetOpenButtonRect(const D2D1_RECT_F& viewport) const;
     TitleButtons GetTitleButtons(const D2D1_RECT_F& viewport) const;
     TitleButton HitTestTitleButton(POINT client_pt) const;
+    bool HitTestOpenButton(POINT client_pt) const;
     bool IsPointOverVisibleImage(POINT client_pt, const D2D1_RECT_F& viewport) const;
     int HitTestThumbnail(POINT client_pt) const;
 
@@ -293,6 +296,8 @@ private:
 
     TitleButton hover_button_ = TitleButton::None;
     TitleButton pressed_button_ = TitleButton::None;
+    bool hover_open_button_ = false;
+    bool pressed_open_button_ = false;
     bool render_timer_armed_ = false;
     ULONGLONG last_interactive_render_tick_ = 0;
     bool deferred_directory_build_pending_ = false;
@@ -382,7 +387,7 @@ bool QmiApp::InitDeviceIndependentResources() {
         return false;
     }
     text_format_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-    text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
+    text_format_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
     text_format_->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
 
     if (FAILED(dwrite_factory_->CreateTextFormat(
@@ -957,6 +962,8 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     current_image_ = std::move(image);
     current_index_ = index;
     current_error_.clear();
+    hover_open_button_ = false;
+    pressed_open_button_ = false;
 
     if (reset_view && fit_on_switch_) {
         ResetView();
@@ -1081,6 +1088,16 @@ D2D1_RECT_F QmiApp::GetImageDestinationRect(const D2D1_RECT_F& viewport) const {
     return D2D1::RectF(cx - dest_w * 0.5f, cy - dest_h * 0.5f, cx + dest_w * 0.5f, cy + dest_h * 0.5f);
 }
 
+D2D1_RECT_F QmiApp::GetOpenButtonRect(const D2D1_RECT_F& viewport) const {
+    const float view_w = std::max(1.0f, viewport.right - viewport.left);
+    const float view_h = std::max(1.0f, viewport.bottom - viewport.top);
+    const float width = Clamp(view_w * 0.34f, 180.0f, 260.0f);
+    const float height = std::min(56.0f, std::max(42.0f, view_h * 0.18f));
+    const float cx = (viewport.left + viewport.right) * 0.5f;
+    const float cy = (viewport.top + viewport.bottom) * 0.5f;
+    return D2D1::RectF(cx - width * 0.5f, cy - height * 0.5f, cx + width * 0.5f, cy + height * 0.5f);
+}
+
 TitleButtons QmiApp::GetTitleButtons(const D2D1_RECT_F& viewport) const {
     TitleButtons b{};
 
@@ -1122,6 +1139,21 @@ TitleButton QmiApp::HitTestTitleButton(POINT client_pt) const {
         return TitleButton::Minimize;
     }
     return TitleButton::None;
+}
+
+bool QmiApp::HitTestOpenButton(POINT client_pt) const {
+    if (!hwnd_ || current_image_.type != ImageType::None) {
+        return false;
+    }
+
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    const D2D1_RECT_F viewport = GetImageViewport(static_cast<float>(rc.right - rc.left), static_cast<float>(rc.bottom - rc.top));
+    const D2D1_RECT_F button_rect = GetOpenButtonRect(viewport);
+
+    const float x = static_cast<float>(client_pt.x);
+    const float y = static_cast<float>(client_pt.y);
+    return x >= button_rect.left && x <= button_rect.right && y >= button_rect.top && y <= button_rect.bottom;
 }
 
 bool QmiApp::IsPointOverVisibleImage(POINT client_pt, const D2D1_RECT_F& viewport) const {
@@ -1227,6 +1259,31 @@ void QmiApp::DrawTitleButtons(const TitleButtons& buttons) {
     draw_button(TitleButton::Close, buttons.close_rect);
 }
 
+void QmiApp::DrawOpenButton(const D2D1_RECT_F& viewport) {
+    if (!d2d_context_ || !brush_panel_ || !brush_text_) {
+        return;
+    }
+    if (current_image_.type != ImageType::None) {
+        return;
+    }
+
+    const D2D1_RECT_F button_rect = GetOpenButtonRect(viewport);
+    const D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(button_rect, 10.0f, 10.0f);
+
+    d2d_context_->FillRoundedRectangle(rounded, brush_panel_.Get());
+    if (hover_open_button_ && brush_hover_) {
+        d2d_context_->FillRoundedRectangle(rounded, brush_hover_.Get());
+    }
+
+    if (pressed_open_button_ && brush_accent_) {
+        d2d_context_->DrawRoundedRectangle(rounded, brush_accent_.Get(), 2.0f);
+    } else if (brush_overlay_) {
+        d2d_context_->DrawRoundedRectangle(rounded, brush_overlay_.Get(), 1.0f);
+    }
+
+    DrawCenteredText(L"Open image...", button_rect, text_format_.Get());
+}
+
 void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
     if (!d2d_context_) {
         return;
@@ -1237,7 +1294,10 @@ void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
     }
 
     if (current_image_.type == ImageType::None) {
-        DrawCenteredText(L"Right-click to open an image, or drag and drop a file.", viewport, text_format_.Get());
+        DrawOpenButton(viewport);
+        const D2D1_RECT_F button_rect = GetOpenButtonRect(viewport);
+        const float hint_top = std::min(viewport.bottom - 38.0f, button_rect.bottom + 12.0f);
+        DrawCenteredText(L"Or drag and drop an image file.", D2D1::RectF(viewport.left + 20.0f, hint_top, viewport.right - 20.0f, hint_top + 26.0f), small_text_format_.Get());
         return;
     }
 
@@ -1529,8 +1589,10 @@ void QmiApp::RequestRender(bool interactive) {
 
 void QmiApp::UpdateHoverState(POINT client_pt) {
     const TitleButton hovered = HitTestTitleButton(client_pt);
-    if (hovered != hover_button_) {
+    const bool hovered_open_button = HitTestOpenButton(client_pt);
+    if (hovered != hover_button_ || hovered_open_button != hover_open_button_) {
         hover_button_ = hovered;
+        hover_open_button_ = hovered_open_button;
         RequestRender(true);
     }
 }
@@ -1693,6 +1755,7 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
 
         case WM_MOUSELEAVE:
             hover_button_ = TitleButton::None;
+            hover_open_button_ = false;
             RequestRender();
             return 0;
 
@@ -1703,6 +1766,13 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             const TitleButton button = HitTestTitleButton(pt);
             if (button != TitleButton::None) {
                 pressed_button_ = button;
+                SetCapture(hwnd_);
+                RequestRender();
+                return 0;
+            }
+
+            if (HitTestOpenButton(pt)) {
+                pressed_open_button_ = true;
                 SetCapture(hwnd_);
                 RequestRender();
                 return 0;
@@ -1751,6 +1821,17 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                     } else if (pressed == TitleButton::Maximize) {
                         ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
                     }
+                }
+                return 0;
+            }
+
+            if (pressed_open_button_) {
+                const bool released_on_button = HitTestOpenButton(pt);
+                pressed_open_button_ = false;
+                ReleaseCapture();
+                RequestRender();
+                if (released_on_button) {
+                    OpenFileDialog();
                 }
                 return 0;
             }
