@@ -2914,7 +2914,7 @@ void QmiApp::DrawOpenButton(const D2D1_RECT_F& viewport) {
         d2d_context_->DrawRoundedRectangle(rounded, brush_overlay_.Get(), 1.0f);
     }
 
-    DrawCenteredText(L"\u6253\u5f00\u56fe\u7247...", button_rect, text_format_.Get());
+    DrawCenteredText(L"\u6253\u5f00\u56fe\u7247", button_rect, text_format_.Get());
 }
 
 void QmiApp::DrawBrokenImagePlaceholder(const D2D1_RECT_F& viewport) {
@@ -2989,9 +2989,6 @@ void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
 
     if (current_image_.type == ImageType::None) {
         DrawOpenButton(viewport);
-        const D2D1_RECT_F button_rect = GetOpenButtonRect(viewport);
-        const float hint_top = std::min(viewport.bottom - 38.0f, button_rect.bottom + 12.0f);
-        DrawCenteredText(L"\u6216\u62d6\u653e\u4e00\u4e2a\u56fe\u7247\u6587\u4ef6\u3002", D2D1::RectF(viewport.left + 20.0f, hint_top, viewport.right - 20.0f, hint_top + 26.0f), small_text_format_.Get());
         return;
     }
     if (current_image_.type == ImageType::Broken) {
