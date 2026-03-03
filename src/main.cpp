@@ -110,7 +110,7 @@ struct AssociationTypeOption {
     const wchar_t* label = L"";
 };
 
-constexpr std::array<AssociationTypeOption, 8> kAssociationTypes = {{
+constexpr std::array<AssociationTypeOption, 10> kAssociationTypes = {{
     {L".jpg", L"JPG (*.jpg)"},
     {L".jpeg", L"JPEG (*.jpeg)"},
     {L".png", L"PNG (*.png)"},
@@ -118,6 +118,8 @@ constexpr std::array<AssociationTypeOption, 8> kAssociationTypes = {{
     {L".ico", L"ICO (*.ico)"},
     {L".webp", L"WebP (*.webp)"},
     {L".gif", L"GIF (*.gif)"},
+    {L".heic", L"HEIC (*.heic)"},
+    {L".heif", L"HEIF (*.heif)"},
     {L".svg", L"SVG (*.svg)"},
 }};
 
@@ -406,7 +408,7 @@ bool ApplyQmiFileAssociations(const std::vector<bool>& checked, std::wstring* ou
 bool IsSupportedExtension(const fs::path& p) {
     const std::wstring ext = ToLower(p.extension().wstring());
     return ext == L".jpg" || ext == L".jpeg" || ext == L".png" || ext == L".bmp" || ext == L".webp" ||
-           ext == L".gif" || ext == L".svg" || ext == L".ico";
+           ext == L".gif" || ext == L".heic" || ext == L".heif" || ext == L".svg" || ext == L".ico";
 }
 
 bool IsWebpExtension(const fs::path& p) {
@@ -2980,7 +2982,7 @@ void QmiApp::OpenFileDialog() {
     ofn.hwndOwner = hwnd_;
     ofn.lpstrFile = file_path;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrFilter = L"\u56fe\u7247\u6587\u4ef6\0*.jpg;*.jpeg;*.png;*.bmp;*.ico;*.webp;*.gif;*.svg\0\u6240\u6709\u6587\u4ef6\0*.*\0";
+    ofn.lpstrFilter = L"\u56fe\u7247\u6587\u4ef6\0*.jpg;*.jpeg;*.png;*.bmp;*.ico;*.webp;*.gif;*.heic;*.heif;*.svg\0\u6240\u6709\u6587\u4ef6\0*.*\0";
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
     ofn.lpstrDefExt = L"jpg";
 
@@ -3697,7 +3699,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
 
             state->about_text = CreateWindowExW(0,
                                                 L"STATIC",
-                                                L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / ico / webp / gif / svg",
+                                                L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / ico / webp / gif / heic / heif / svg",
                                                 WS_CHILD | WS_VISIBLE,
                                                 0,
                                                 0,
