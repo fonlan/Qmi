@@ -1968,43 +1968,100 @@ void QmiApp::DrawButtonGlyph(TitleButton button, const RECT& rect) {
     const float cx = (rect.left + rect.right) * 0.5f;
     const float cy = (rect.top + rect.bottom) * 0.5f;
     const float w = static_cast<float>(rect.right - rect.left);
-    const float s = std::max(8.0f, w * 0.17f);
+    const float half = std::max(7.5f, w * 0.155f);
+    const float stroke = 1.3f;
+    const float cross_half = half * 0.88f;
+    auto snap = [](float value) { return std::floor(value) + 0.5f; };
+
+    const D2D1_ANTIALIAS_MODE previous_aa = d2d_context_->GetAntialiasMode();
+    d2d_context_->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
 
     switch (button) {
         case TitleButton::Minimize: {
-            d2d_context_->DrawLine(D2D1::Point2F(cx - s, cy + s * 0.4f),
-                                   D2D1::Point2F(cx + s, cy + s * 0.4f),
+            const float left = snap(cx - half);
+            const float right = snap(cx + half);
+            const float y = snap(cy + half * 0.46f);
+            d2d_context_->DrawLine(D2D1::Point2F(left, y),
+                                   D2D1::Point2F(right, y),
                                    brush_text_.Get(),
-                                   1.6f);
+                                   stroke);
             break;
         }
         case TitleButton::Maximize: {
             const bool maximized = IsZoomed(hwnd_) != FALSE;
             if (!maximized) {
-                d2d_context_->DrawRectangle(
-                    D2D1::RectF(cx - s, cy - s, cx + s, cy + s), brush_text_.Get(), 1.5f);
+                const float left = snap(cx - half);
+                const float top = snap(cy - half);
+                const float right = snap(cx + half);
+                const float bottom = snap(cy + half);
+                d2d_context_->DrawRectangle(D2D1::RectF(left, top, right, bottom), brush_text_.Get(), stroke);
             } else {
-                d2d_context_->DrawRectangle(
-                    D2D1::RectF(cx - s + 2.5f, cy - s + 1.5f, cx + s + 2.5f, cy + s + 1.5f), brush_text_.Get(), 1.2f);
-                d2d_context_->DrawRectangle(
-                    D2D1::RectF(cx - s - 2.0f, cy - s - 1.0f, cx + s - 2.0f, cy + s - 1.0f), brush_text_.Get(), 1.2f);
+                const float offset_x = 2.5f;
+                const float offset_y = 2.0f;
+
+                const float back_left = snap(cx - half + offset_x);
+                const float back_top = snap(cy - half - offset_y);
+                const float back_right = snap(cx + half + offset_x);
+                const float back_bottom = snap(cy + half - offset_y);
+
+                const float front_left = snap(cx - half - offset_x);
+                const float front_top = snap(cy - half + offset_y);
+                const float front_right = snap(cx + half - offset_x);
+                const float front_bottom = snap(cy + half + offset_y);
+
+                // Draw only the visible parts of the back window so the front window naturally occludes it.
+                d2d_context_->DrawLine(D2D1::Point2F(back_left, back_top),
+                                       D2D1::Point2F(back_right, back_top),
+                                       brush_text_.Get(),
+                                       stroke);
+                d2d_context_->DrawLine(D2D1::Point2F(back_right, back_top),
+                                       D2D1::Point2F(back_right, back_bottom),
+                                       brush_text_.Get(),
+                                       stroke);
+                d2d_context_->DrawLine(D2D1::Point2F(back_right, back_bottom),
+                                       D2D1::Point2F(front_right, back_bottom),
+                                       brush_text_.Get(),
+                                       stroke);
+                d2d_context_->DrawLine(D2D1::Point2F(back_left, back_top),
+                                       D2D1::Point2F(back_left, front_top),
+                                       brush_text_.Get(),
+                                       stroke);
+
+                d2d_context_->DrawLine(D2D1::Point2F(front_left, front_top),
+                                       D2D1::Point2F(front_right, front_top),
+                                       brush_text_.Get(),
+                                       stroke);
+                d2d_context_->DrawLine(D2D1::Point2F(front_left, front_top),
+                                       D2D1::Point2F(front_left, front_bottom),
+                                       brush_text_.Get(),
+                                       stroke);
+                d2d_context_->DrawLine(D2D1::Point2F(front_right, front_top),
+                                       D2D1::Point2F(front_right, front_bottom),
+                                       brush_text_.Get(),
+                                       stroke);
+                d2d_context_->DrawLine(D2D1::Point2F(front_left, front_bottom),
+                                       D2D1::Point2F(front_right, front_bottom),
+                                       brush_text_.Get(),
+                                       stroke);
             }
             break;
         }
         case TitleButton::Close: {
-            d2d_context_->DrawLine(D2D1::Point2F(cx - s, cy - s),
-                                   D2D1::Point2F(cx + s, cy + s),
+            d2d_context_->DrawLine(D2D1::Point2F(snap(cx - cross_half), snap(cy - cross_half)),
+                                   D2D1::Point2F(snap(cx + cross_half), snap(cy + cross_half)),
                                    brush_text_.Get(),
-                                   1.6f);
-            d2d_context_->DrawLine(D2D1::Point2F(cx + s, cy - s),
-                                   D2D1::Point2F(cx - s, cy + s),
+                                   stroke);
+            d2d_context_->DrawLine(D2D1::Point2F(snap(cx + cross_half), snap(cy - cross_half)),
+                                   D2D1::Point2F(snap(cx - cross_half), snap(cy + cross_half)),
                                    brush_text_.Get(),
-                                   1.6f);
+                                   stroke);
             break;
         }
         default:
             break;
     }
+
+    d2d_context_->SetAntialiasMode(previous_aa);
 }
 
 void QmiApp::DrawTitleButtons(const TitleButtons& buttons) {

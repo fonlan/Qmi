@@ -22,6 +22,7 @@
 - App/window/taskbar icon comes from repository root `Qmi.png` (converted to a multi-size `build/Qmi.ico` and embedded as Win32 resource).
 - No top title bar is drawn.
 - Minimize / maximize / close buttons are custom-drawn in the top-right of the image viewport.
+- Title-button glyphs are styled close to native Windows caption icons (minimize line, maximize square, restore overlap, close X).
 - Image viewport has zero outer margin/gap (flush to window content area) for a truly borderless look.
 - Areas outside the image viewport are rendered as translucent overlays/panels with alpha `200/255` (~78%).
 - Main window uses `WS_EX_LAYERED` with per-pixel alpha composition via `UpdateLayeredWindow`.

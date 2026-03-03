@@ -24,8 +24,33 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(libwebp)
 
+set(QMI_ICON_PNG "${CMAKE_SOURCE_DIR}/Qmi.png")
+set(QMI_ICON_ICO "${CMAKE_BINARY_DIR}/Qmi.ico")
+set(QMI_ICON_RC "${CMAKE_BINARY_DIR}/qmi_icon.rc")
+set(QMI_ICON_ICO_RC_PATH "${QMI_ICON_ICO}")
+
+if(NOT EXISTS "${QMI_ICON_PNG}")
+    message(FATAL_ERROR "Missing app icon source: ${QMI_ICON_PNG}")
+endif()
+
+execute_process(
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+            "${CMAKE_SOURCE_DIR}/tools/png_to_ico.ps1"
+            -InputPng "${QMI_ICON_PNG}"
+            -OutputIco "${QMI_ICON_ICO}"
+    RESULT_VARIABLE QMI_ICON_RESULT
+    OUTPUT_VARIABLE QMI_ICON_STDOUT
+    ERROR_VARIABLE QMI_ICON_STDERR
+)
+if(NOT QMI_ICON_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to convert Qmi.png to icon.\n${QMI_ICON_STDOUT}\n${QMI_ICON_STDERR}")
+endif()
+
+configure_file("${CMAKE_SOURCE_DIR}/src/qmi_icon.rc.in" "${QMI_ICON_RC}" @ONLY)
+
 add_executable(Qmi WIN32
     src/main.cpp
+    "${QMI_ICON_RC}"
 )
 
 target_compile_definitions(Qmi PRIVATE
