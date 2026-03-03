@@ -73,8 +73,9 @@ constexpr int kAppIconResourceId = 101;
 
 constexpr UINT kMenuOpenFile = 1001;
 constexpr UINT kMenuCopyImage = 1002;
-constexpr UINT kMenuSettings = 1003;
-constexpr UINT kMenuExit = 1004;
+constexpr UINT kMenuCopyFile = 1003;
+constexpr UINT kMenuSettings = 1004;
+constexpr UINT kMenuExit = 1005;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 constexpr UINT_PTR kAnimationTimerId = 3;
@@ -1011,6 +1012,7 @@ private:
     void OpenFileDialog();
     void OpenSettingsWindow();
     bool CopyCurrentImageToClipboard();
+    bool CopyCurrentFileToClipboard();
     HRESULT ExtractCurrentImagePixels(UINT32* out_width,
                                       UINT32* out_height,
                                       std::vector<std::uint8_t>* out_pixels);
@@ -3598,6 +3600,99 @@ bool QmiApp::CopyCurrentImageToClipboard() {
     return copied;
 }
 
+bool QmiApp::CopyCurrentFileToClipboard() {
+    if (current_image_.path.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    fs::path absolute_path = fs::absolute(current_image_.path, ec);
+    if (ec) {
+        absolute_path = current_image_.path;
+    }
+    if (!fs::is_regular_file(absolute_path, ec) || ec) {
+        return false;
+    }
+
+    const std::wstring file_path = absolute_path.lexically_normal().wstring();
+    if (file_path.empty()) {
+        return false;
+    }
+
+    if (file_path.size() > (std::numeric_limits<size_t>::max() / sizeof(wchar_t)) - 2) {
+        return false;
+    }
+    const size_t path_bytes = (file_path.size() + 2) * sizeof(wchar_t);
+    if (sizeof(DROPFILES) > std::numeric_limits<size_t>::max() - path_bytes) {
+        return false;
+    }
+    const size_t drop_bytes = sizeof(DROPFILES) + path_bytes;
+
+    HGLOBAL drop_handle = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, drop_bytes);
+    if (!drop_handle) {
+        return false;
+    }
+
+    void* drop_memory = GlobalLock(drop_handle);
+    if (!drop_memory) {
+        GlobalFree(drop_handle);
+        return false;
+    }
+
+    auto* drop_files = static_cast<DROPFILES*>(drop_memory);
+    drop_files->pFiles = sizeof(DROPFILES);
+    drop_files->fWide = TRUE;
+
+    auto* file_list =
+        reinterpret_cast<wchar_t*>(reinterpret_cast<std::uint8_t*>(drop_memory) + sizeof(DROPFILES));
+    memcpy(file_list, file_path.c_str(), file_path.size() * sizeof(wchar_t));
+    file_list[file_path.size()] = L'\0';
+    file_list[file_path.size() + 1] = L'\0';
+    GlobalUnlock(drop_handle);
+
+    HGLOBAL effect_handle = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(DWORD));
+    if (effect_handle) {
+        void* effect_memory = GlobalLock(effect_handle);
+        if (effect_memory) {
+            *static_cast<DWORD*>(effect_memory) = DROPEFFECT_COPY;
+            GlobalUnlock(effect_handle);
+        } else {
+            GlobalFree(effect_handle);
+            effect_handle = nullptr;
+        }
+    }
+
+    if (!OpenClipboard(hwnd_)) {
+        GlobalFree(drop_handle);
+        if (effect_handle) {
+            GlobalFree(effect_handle);
+        }
+        return false;
+    }
+
+    bool copied = false;
+    if (EmptyClipboard() && SetClipboardData(CF_HDROP, drop_handle)) {
+        copied = true;
+        drop_handle = nullptr;
+
+        if (effect_handle) {
+            const UINT preferred_drop_effect = RegisterClipboardFormatW(CFSTR_PREFERREDDROPEFFECT);
+            if (preferred_drop_effect != 0 && SetClipboardData(preferred_drop_effect, effect_handle)) {
+                effect_handle = nullptr;
+            }
+        }
+    }
+
+    CloseClipboard();
+    if (drop_handle) {
+        GlobalFree(drop_handle);
+    }
+    if (effect_handle) {
+        GlobalFree(effect_handle);
+    }
+    return copied;
+}
+
 void QmiApp::ShowContextMenu(POINT screen_pt) {
     HMENU menu = CreatePopupMenu();
     if (!menu) {
@@ -3605,8 +3700,10 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     }
 
     const bool can_copy_image = IsRenderableImageType(current_image_.type);
+    const bool can_copy_file = !current_image_.path.empty();
     AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00...");
     AppendMenuW(menu, can_copy_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImage, L"\u590d\u5236\u56fe\u7247");
+    AppendMenuW(menu, can_copy_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyFile, L"\u590d\u5236\u6587\u4ef6");
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u8bbe\u7f6e...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa");
@@ -3621,6 +3718,9 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
             break;
         case kMenuCopyImage:
             CopyCurrentImageToClipboard();
+            break;
+        case kMenuCopyFile:
+            CopyCurrentFileToClipboard();
             break;
         case kMenuSettings:
             OpenSettingsWindow();
@@ -4132,6 +4232,9 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                     return 0;
                 case kMenuCopyImage:
                     CopyCurrentImageToClipboard();
+                    return 0;
+                case kMenuCopyFile:
+                    CopyCurrentFileToClipboard();
                     return 0;
                 case kMenuSettings:
                     OpenSettingsWindow();
