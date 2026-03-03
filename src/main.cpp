@@ -108,6 +108,7 @@ constexpr float kThumbnailCellOpacity = 0.58f;
 constexpr float kFilmStripLargeScale = 1.08f;
 constexpr float kFilmStripMediumScale = 1.00f;
 constexpr float kFilmStripSmallScale = 0.74f;
+constexpr float kFilmStripHoverScaleBoost = 0.13f;
 constexpr float kFilmStripScaleLerp = 0.28f;
 
 template <typename T>
@@ -1085,6 +1086,7 @@ private:
     EdgeNavButton hover_edge_nav_button_ = EdgeNavButton::None;
     EdgeNavButton visible_edge_nav_button_ = EdgeNavButton::None;
     EdgeNavButton pressed_edge_nav_button_ = EdgeNavButton::None;
+    int hover_thumbnail_index_ = -1;
     bool hover_open_button_ = false;
     bool pressed_open_button_ = false;
     bool render_timer_armed_ = false;
@@ -2382,6 +2384,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     hover_edge_nav_button_ = EdgeNavButton::None;
     visible_edge_nav_button_ = EdgeNavButton::None;
     pressed_edge_nav_button_ = EdgeNavButton::None;
+    hover_thumbnail_index_ = -1;
 
     if (reset_view && fit_on_switch_) {
         ResetView();
@@ -3068,6 +3071,9 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
                 target_scale = kFilmStripMediumScale;
             }
         }
+        if (i == hover_thumbnail_index_) {
+            target_scale += kFilmStripHoverScaleBoost;
+        }
 
         float draw_scale = target_scale;
         const float previous_scale = thumbnail_draw_scales_[i];
@@ -3539,12 +3545,14 @@ void QmiApp::UpdateHoverState(POINT client_pt) {
     const bool hovered_open_button = HitTestOpenButton(client_pt);
     const EdgeNavButton hovered_nav_button = HitTestEdgeNavButton(client_pt);
     const EdgeNavButton visible_nav_button = HitTestEdgeNavTrigger(client_pt);
+    const int hovered_thumb_index = HitTestThumbnail(client_pt);
     if (hovered != hover_button_ || hovered_open_button != hover_open_button_ || hovered_nav_button != hover_edge_nav_button_ ||
-        visible_nav_button != visible_edge_nav_button_) {
+        visible_nav_button != visible_edge_nav_button_ || hovered_thumb_index != hover_thumbnail_index_) {
         hover_button_ = hovered;
         hover_open_button_ = hovered_open_button;
         hover_edge_nav_button_ = hovered_nav_button;
         visible_edge_nav_button_ = visible_nav_button;
+        hover_thumbnail_index_ = hovered_thumb_index;
         RequestRender(true);
     }
 }
@@ -3732,6 +3740,7 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             hover_open_button_ = false;
             hover_edge_nav_button_ = EdgeNavButton::None;
             visible_edge_nav_button_ = EdgeNavButton::None;
+            hover_thumbnail_index_ = -1;
             RequestRender();
             return 0;
 
