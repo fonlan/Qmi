@@ -63,6 +63,7 @@ class QmiApp;
 namespace {
 constexpr wchar_t kMainClassName[] = L"QmiMainWindowClass";
 constexpr wchar_t kSettingsClassName[] = L"QmiSettingsWindowClass";
+constexpr int kAppIconResourceId = 101;
 
 constexpr UINT kMenuOpenFile = 1001;
 constexpr UINT kMenuSettings = 1002;
@@ -128,6 +129,16 @@ bool IsGifExtension(const fs::path& p) {
 
 bool IsIcoExtension(const fs::path& p) {
     return ToLower(p.extension().wstring()) == L".ico";
+}
+
+HICON LoadAppIcon(HINSTANCE hinstance, int width, int height) {
+    return reinterpret_cast<HICON>(LoadImageW(
+        hinstance,
+        MAKEINTRESOURCEW(kAppIconResourceId),
+        IMAGE_ICON,
+        width,
+        height,
+        LR_DEFAULTCOLOR | LR_SHARED));
 }
 
 bool TryReadMetadataUInt(IWICMetadataQueryReader* reader, const wchar_t* query, UINT* out_value) {
@@ -328,18 +339,15 @@ struct SettingsWindowState {
     int active_page = static_cast<int>(SettingsPage::General);
 
     HWND nav_list = nullptr;
+    HWND nav_divider = nullptr;
 
-    HWND general_title = nullptr;
     HWND fit_checkbox = nullptr;
     HWND smooth_checkbox = nullptr;
 
-    HWND associations_title = nullptr;
     HWND associations_text = nullptr;
 
-    HWND about_title = nullptr;
     HWND about_text = nullptr;
 
-    HFONT title_font = nullptr;
     HFONT nav_font = nullptr;
     HFONT body_font = nullptr;
 };
@@ -361,14 +369,11 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
     const bool show_associations = state->active_page == static_cast<int>(SettingsPage::Associations);
     const bool show_about = state->active_page == static_cast<int>(SettingsPage::About);
 
-    ShowWindow(state->general_title, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->fit_checkbox, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->smooth_checkbox, show_general ? SW_SHOW : SW_HIDE);
 
-    ShowWindow(state->associations_title, show_associations ? SW_SHOW : SW_HIDE);
     ShowWindow(state->associations_text, show_associations ? SW_SHOW : SW_HIDE);
 
-    ShowWindow(state->about_title, show_about ? SW_SHOW : SW_HIDE);
     ShowWindow(state->about_text, show_about ? SW_SHOW : SW_HIDE);
     if (state->nav_list) {
         InvalidateRect(state->nav_list, nullptr, FALSE);
@@ -387,28 +392,32 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
 
     constexpr int kOuterPadding = 20;
     constexpr int kNavWidth = 130;
-    constexpr int kColumnsGap = 22;
+    constexpr int kNavDividerGap = 12;
+    constexpr int kDividerWidth = 2;
+    constexpr int kDividerPanelGap = 12;
     constexpr int kPanelPaddingX = 16;
 
     const int nav_height = std::max(120, client_height - (kOuterPadding * 2));
     MoveWindow(state->nav_list, kOuterPadding, kOuterPadding, kNavWidth, nav_height, TRUE);
 
-    const int panel_x = kOuterPadding + kNavWidth + kColumnsGap;
+    const int divider_x = kOuterPadding + kNavWidth + kNavDividerGap;
+    if (state->nav_divider) {
+        MoveWindow(state->nav_divider, divider_x, kOuterPadding, kDividerWidth, nav_height, TRUE);
+    }
+
+    const int panel_x = divider_x + kDividerWidth + kDividerPanelGap;
     const int panel_width = std::max(160, client_width - panel_x - kOuterPadding);
     const int panel_y = kOuterPadding;
     const int panel_height = std::max(120, client_height - (kOuterPadding * 2));
 
     const int text_width = std::max(80, panel_width - kPanelPaddingX * 2);
-    MoveWindow(state->general_title, panel_x + kPanelPaddingX, panel_y + 8, text_width, 34, TRUE);
-    MoveWindow(state->fit_checkbox, panel_x + kPanelPaddingX, panel_y + 56, text_width, 28, TRUE);
-    MoveWindow(state->smooth_checkbox, panel_x + kPanelPaddingX, panel_y + 92, text_width, 28, TRUE);
+    MoveWindow(state->fit_checkbox, panel_x + kPanelPaddingX, panel_y + 8, text_width, 28, TRUE);
+    MoveWindow(state->smooth_checkbox, panel_x + kPanelPaddingX, panel_y + 44, text_width, 28, TRUE);
 
-    MoveWindow(state->associations_title, panel_x + kPanelPaddingX, panel_y + 8, text_width, 34, TRUE);
-    MoveWindow(state->associations_text, panel_x + kPanelPaddingX, panel_y + 56, text_width, std::max(40, panel_height - 72),
+    MoveWindow(state->associations_text, panel_x + kPanelPaddingX, panel_y + 8, text_width, std::max(40, panel_height - 16),
                TRUE);
 
-    MoveWindow(state->about_title, panel_x + kPanelPaddingX, panel_y + 8, text_width, 34, TRUE);
-    MoveWindow(state->about_text, panel_x + kPanelPaddingX, panel_y + 56, text_width, std::max(40, panel_height - 72), TRUE);
+    MoveWindow(state->about_text, panel_x + kPanelPaddingX, panel_y + 8, text_width, std::max(40, panel_height - 16), TRUE);
 }
 }  // namespace
 
@@ -662,13 +671,23 @@ bool QmiApp::InitDeviceIndependentResources() {
 }
 
 bool QmiApp::RegisterWindowClasses() {
+    HICON app_icon = LoadAppIcon(hinstance_, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON));
+    HICON app_icon_small = LoadAppIcon(hinstance_, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON));
+    if (!app_icon) {
+        app_icon = LoadIconW(nullptr, IDI_APPLICATION);
+    }
+    if (!app_icon_small) {
+        app_icon_small = LoadIconW(nullptr, IDI_APPLICATION);
+    }
+
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.hInstance = hinstance_;
     wc.lpfnWndProc = &QmiApp::MainWndProc;
     wc.lpszClassName = kMainClassName;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon = app_icon;
+    wc.hIconSm = app_icon_small;
     wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     if (!RegisterClassExW(&wc)) {
         return false;
@@ -680,7 +699,8 @@ bool QmiApp::RegisterWindowClasses() {
     settings_wc.lpfnWndProc = &QmiApp::SettingsWndProc;
     settings_wc.lpszClassName = kSettingsClassName;
     settings_wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    settings_wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    settings_wc.hIcon = app_icon;
+    settings_wc.hIconSm = app_icon_small;
     settings_wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     if (!RegisterClassExW(&settings_wc)) {
         return false;
@@ -706,6 +726,13 @@ bool QmiApp::CreateMainWindow() {
                             this);
     if (!hwnd_) {
         return false;
+    }
+
+    if (HICON app_icon = LoadAppIcon(hinstance_, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON))) {
+        SendMessageW(hwnd_, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(app_icon));
+    }
+    if (HICON app_icon_small = LoadAppIcon(hinstance_, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON))) {
+        SendMessageW(hwnd_, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(app_icon_small));
     }
 
     DragAcceptFiles(hwnd_, TRUE);
@@ -2774,8 +2801,6 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 return -1;
             }
 
-            state->title_font = CreateFontW(-24, 0, 0, 0, 600, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
             state->nav_font = CreateFontW(-18, 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH,
                                           L"Segoe UI");
@@ -2796,6 +2821,19 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                               reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlSettingsNav)),
                                               nullptr,
                                               nullptr);
+
+            state->nav_divider = CreateWindowExW(0,
+                                                 L"STATIC",
+                                                 nullptr,
+                                                 WS_CHILD | WS_VISIBLE | SS_ETCHEDVERT,
+                                                 0,
+                                                 0,
+                                                 0,
+                                                 0,
+                                                 hwnd,
+                                                 nullptr,
+                                                 nullptr,
+                                                 nullptr);
             if (state->nav_list) {
                 SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5e38\u89c4"));
                 SendMessageW(state->nav_list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5173\u8054"));
@@ -2803,18 +2841,6 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 SendMessageW(state->nav_list, LB_SETCURSEL, static_cast<WPARAM>(SettingsPage::General), 0);
             }
 
-            state->general_title = CreateWindowExW(0,
-                                                   L"STATIC",
-                                                   L"\u5e38\u89c4",
-                                                   WS_CHILD | WS_VISIBLE,
-                                                   0,
-                                                   0,
-                                                   0,
-                                                   0,
-                                                   hwnd,
-                                                   nullptr,
-                                                   nullptr,
-                                                   nullptr);
             state->fit_checkbox = CreateWindowExW(0,
                                                   L"BUTTON",
                                                   L"\u5207\u6362\u56fe\u7247\u65f6\u81ea\u52a8\u9002\u914d\u7a97\u53e3",
@@ -2845,18 +2871,6 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                          app && app->smooth_sampling_ ? BST_CHECKED : BST_UNCHECKED,
                          0);
 
-            state->associations_title = CreateWindowExW(0,
-                                                        L"STATIC",
-                                                        L"\u5173\u8054",
-                                                        WS_CHILD | WS_VISIBLE,
-                                                        0,
-                                                        0,
-                                                        0,
-                                                        0,
-                                                        hwnd,
-                                                        nullptr,
-                                                        nullptr,
-                                                        nullptr);
             state->associations_text = CreateWindowExW(
                 0,
                 L"STATIC",
@@ -2871,18 +2885,6 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 nullptr,
                 nullptr);
 
-            state->about_title = CreateWindowExW(0,
-                                                 L"STATIC",
-                                                 L"\u5173\u4e8e",
-                                                 WS_CHILD | WS_VISIBLE,
-                                                 0,
-                                                 0,
-                                                 0,
-                                                 0,
-                                                 hwnd,
-                                                 nullptr,
-                                                 nullptr,
-                                                 nullptr);
             state->about_text = CreateWindowExW(0,
                                                 L"STATIC",
                                                 L"Qmi\r\n\r\n\u8f7b\u91cf\u7ea7 Windows \u770b\u56fe\u5de5\u5177\u3002\r\n\u652f\u6301\u683c\u5f0f\uff1ajpg / jpeg / png / bmp / ico / webp / gif / svg",
@@ -2897,12 +2899,9 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                 nullptr);
 
             SetControlFont(state->nav_list, state->nav_font);
-            SetControlFont(state->general_title, state->title_font);
             SetControlFont(state->fit_checkbox, state->body_font);
             SetControlFont(state->smooth_checkbox, state->body_font);
-            SetControlFont(state->associations_title, state->title_font);
             SetControlFont(state->associations_text, state->body_font);
-            SetControlFont(state->about_title, state->title_font);
             SetControlFont(state->about_text, state->body_font);
 
             SetActiveSettingsPage(state, static_cast<int>(SettingsPage::General));
@@ -2990,14 +2989,10 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             if (state) {
                 const HWND ctrl = reinterpret_cast<HWND>(lparam);
                 HDC hdc = reinterpret_cast<HDC>(wparam);
-                const bool is_panel_ctrl = ctrl == state->general_title || ctrl == state->fit_checkbox ||
-                                           ctrl == state->smooth_checkbox || ctrl == state->associations_title ||
-                                           ctrl == state->associations_text || ctrl == state->about_title ||
-                                           ctrl == state->about_text;
+                const bool is_panel_ctrl = ctrl == state->fit_checkbox || ctrl == state->smooth_checkbox ||
+                                           ctrl == state->associations_text || ctrl == state->about_text;
                 if (is_panel_ctrl) {
-                    const bool title_ctrl = ctrl == state->general_title || ctrl == state->associations_title ||
-                                            ctrl == state->about_title;
-                    SetTextColor(hdc, title_ctrl ? RGB(28, 34, 46) : RGB(52, 58, 70));
+                    SetTextColor(hdc, RGB(52, 58, 70));
                     SetBkMode(hdc, TRANSPARENT);
                     return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
                 }
@@ -3017,9 +3012,6 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             return 0;
         case WM_NCDESTROY:
             if (state) {
-                if (state->title_font) {
-                    DeleteObject(state->title_font);
-                }
                 if (state->nav_font) {
                     DeleteObject(state->nav_font);
                 }

@@ -13,10 +13,13 @@
 
 - `CMakeLists.txt`: single `WIN32` target `Qmi`, links D2D/D3D/WIC/DWM/Win32 libs and `libwebp` (via CMake `FetchContent`).
 - `src/main.cpp`: entire application implementation in one file (`QmiApp`).
+- `src/qmi_icon.rc.in`: Windows resource template, embeds generated `Qmi.ico` into the executable.
+- `tools/png_to_ico.ps1`: converts `Qmi.png` into a multi-size ICO payload (`16/20/24/32/40/48/64/128/256`) during CMake configure.
 
 ## Current UI/Behavior
 
 - Main window style: `WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX`.
+- App/window/taskbar icon comes from repository root `Qmi.png` (converted to a multi-size `build/Qmi.ico` and embedded as Win32 resource).
 - No top title bar is drawn.
 - Minimize / maximize / close buttons are custom-drawn in the top-right of the image viewport.
 - Image viewport has zero outer margin/gap (flush to window content area) for a truly borderless look.
@@ -38,9 +41,11 @@
 - Settings window uses a two-column layout:
   - Left navigation menu: `常规`, `关联`, `关于`
   - Left navigation has no header label and uses a compact width
+  - A visible vertical divider line is shown between the left navigation and right content panel
   - Visual style follows a modern web-like modal look with minimal, plain background treatment
   - Left navigation area and right options area are borderless (no inset/client-edge frames)
   - Custom tinted background blocks are removed; selection is indicated by typography/accent only
+  - Right panel does not repeat page names like `常规` / `关联` / `关于`; those labels appear only in the left navigation
   - Right-side option text/background rendering is transparent (no filled text backing)
   - Existing toggles are under `常规`:
     - Fit-to-window when switching image
@@ -90,6 +95,7 @@ Build output executable:
 
 - App lifecycle / init: `QmiApp::Initialize`, `QmiApp::Run`
 - Window creation/backdrop: `CreateMainWindow`, `ApplyWindowBackdrop`
+- Window class registration/icon binding: `RegisterWindowClasses` + resource icon ID `101`
 - Image loading:
   - Raster: `LoadRasterBitmap`
   - GIF animation decode/composition: `LoadGifAnimation`
