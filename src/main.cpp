@@ -77,6 +77,7 @@ constexpr UINT kMenuCopyFile = 1003;
 constexpr UINT kMenuDeleteFile = 1004;
 constexpr UINT kMenuSettings = 1005;
 constexpr UINT kMenuExit = 1006;
+constexpr UINT kMenuOpenContainingFolder = 1007;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 constexpr UINT_PTR kAnimationTimerId = 3;
@@ -1012,6 +1013,7 @@ private:
     void ShowContextMenu(POINT screen_pt);
     void OpenFileDialog();
     void OpenSettingsWindow();
+    bool OpenCurrentImageInFolder();
     bool CopyCurrentImageToClipboard();
     bool CopyCurrentFileToClipboard();
     bool MoveCurrentFileToRecycleBin();
@@ -3695,6 +3697,48 @@ bool QmiApp::CopyCurrentFileToClipboard() {
     return copied;
 }
 
+bool QmiApp::OpenCurrentImageInFolder() {
+    if (current_image_.path.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    fs::path target_path = fs::absolute(current_image_.path, ec);
+    if (ec) {
+        target_path = current_image_.path;
+    }
+    if (target_path.empty()) {
+        return false;
+    }
+
+    target_path = target_path.lexically_normal();
+    std::wstring target = target_path.wstring();
+    if (target.empty()) {
+        return false;
+    }
+
+    PIDLIST_ABSOLUTE item_pidl = ILCreateFromPathW(target.c_str());
+    if (item_pidl) {
+        const HRESULT hr = SHOpenFolderAndSelectItems(item_pidl, 0, nullptr, 0);
+        ILFree(item_pidl);
+        if (SUCCEEDED(hr)) {
+            return true;
+        }
+    }
+
+    const fs::path parent = target_path.parent_path();
+    if (parent.empty()) {
+        return false;
+    }
+    const std::wstring parent_path = parent.lexically_normal().wstring();
+    if (parent_path.empty()) {
+        return false;
+    }
+
+    const HINSTANCE shell_result = ShellExecuteW(hwnd_, L"open", parent_path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(shell_result) > 32;
+}
+
 bool QmiApp::MoveCurrentFileToRecycleBin() {
     if (current_image_.path.empty()) {
         return false;
@@ -3799,7 +3843,12 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     const bool can_copy_image = IsRenderableImageType(current_image_.type);
     const bool can_copy_file = !current_image_.path.empty();
     const bool can_delete_file = can_copy_file;
+    const bool can_open_containing_folder = can_copy_file;
     AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00...");
+    AppendMenuW(menu,
+                can_open_containing_folder ? MF_STRING : (MF_STRING | MF_GRAYED),
+                kMenuOpenContainingFolder,
+                L"\u6253\u5f00\u6240\u5728\u6587\u4ef6\u5939");
     AppendMenuW(menu, can_copy_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImage, L"\u590d\u5236\u56fe\u7247");
     AppendMenuW(menu, can_copy_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyFile, L"\u590d\u5236\u6587\u4ef6");
     AppendMenuW(menu, can_delete_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuDeleteFile, L"\u5220\u9664\u6587\u4ef6");
@@ -3814,6 +3863,14 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     switch (cmd) {
         case kMenuOpenFile:
             OpenFileDialog();
+            break;
+        case kMenuOpenContainingFolder:
+            if (!OpenCurrentImageInFolder()) {
+                MessageBoxW(hwnd_,
+                            L"\u6253\u5f00\u6240\u5728\u6587\u4ef6\u5939\u5931\u8d25\uff0c\u6587\u4ef6\u53ef\u80fd\u4e0d\u5b58\u5728\u6216\u8def\u5f84\u4e0d\u53ef\u8bbf\u95ee\u3002",
+                            L"Qmi",
+                            MB_ICONERROR | MB_OK);
+            }
             break;
         case kMenuCopyImage:
             CopyCurrentImageToClipboard();
@@ -4336,6 +4393,14 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
             switch (LOWORD(wparam)) {
                 case kMenuOpenFile:
                     OpenFileDialog();
+                    return 0;
+                case kMenuOpenContainingFolder:
+                    if (!OpenCurrentImageInFolder()) {
+                        MessageBoxW(hwnd_,
+                                    L"\u6253\u5f00\u6240\u5728\u6587\u4ef6\u5939\u5931\u8d25\uff0c\u6587\u4ef6\u53ef\u80fd\u4e0d\u5b58\u5728\u6216\u8def\u5f84\u4e0d\u53ef\u8bbf\u95ee\u3002",
+                                    L"Qmi",
+                                    MB_ICONERROR | MB_OK);
+                    }
                     return 0;
                 case kMenuCopyImage:
                     CopyCurrentImageToClipboard();
