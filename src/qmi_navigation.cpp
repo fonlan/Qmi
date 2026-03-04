@@ -179,6 +179,7 @@ void QmiApp::BuildDirectoryList(const fs::path& selected_file) {
 
     thumbnails_.assign(images_.size(), Thumbnail{});
     thumbnail_draw_scales_.assign(images_.size(), 0.0f);
+    film_strip_scale_anim_tick_ = 0;
 }
 
 void QmiApp::ScheduleDeferredDirectoryBuild(const fs::path& selected_file) {
@@ -333,6 +334,7 @@ bool QmiApp::OpenImagePath(const fs::path& path, bool reset_view, bool defer_dir
         current_index_ = 0;
         thumbnails_.assign(1, Thumbnail{});
         thumbnail_draw_scales_.assign(1, 0.0f);
+        film_strip_scale_anim_tick_ = 0;
         film_strip_scroll_index_ = -1;
     } else {
         BuildDirectoryList(path);

@@ -737,6 +737,7 @@ bool QmiApp::MoveCurrentFileToRecycleBin() {
     images_.clear();
     thumbnails_.clear();
     thumbnail_draw_scales_.clear();
+    film_strip_scale_anim_tick_ = 0;
     visible_thumbs_.clear();
     current_index_ = -1;
     film_strip_scroll_index_ = -1;

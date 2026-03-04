@@ -285,6 +285,7 @@ private:
     bool pressed_open_button_ = false;
     bool render_timer_armed_ = false;
     ULONGLONG last_interactive_render_tick_ = 0;
+    ULONGLONG film_strip_scale_anim_tick_ = 0;
     bool deferred_directory_build_pending_ = false;
     std::wstring deferred_directory_target_norm_;
     bool bitmaps_need_reload_ = false;

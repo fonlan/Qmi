@@ -122,7 +122,9 @@ constexpr float kFilmStripLargeScale = 1.08f;
 constexpr float kFilmStripMediumScale = 1.00f;
 constexpr float kFilmStripSmallScale = 0.74f;
 constexpr float kFilmStripHoverScaleBoost = 0.13f;
-constexpr float kFilmStripScaleLerp = 0.28f;
+constexpr float kFilmStripScaleUnitsPerSecond = 2.1f;
+constexpr ULONGLONG kFilmStripAnimMaxDeltaMs = 33;
+constexpr float kFilmStripScaleSnapEpsilon = 0.002f;
 
 template <typename T>
 T Clamp(T v, T lo, T hi) {
@@ -543,6 +545,7 @@ bool QmiApp::CreateWindowSizeResources() {
     if (bitmaps_need_reload_) {
         thumbnails_.assign(images_.size(), Thumbnail{});
         thumbnail_draw_scales_.assign(images_.size(), 0.0f);
+        film_strip_scale_anim_tick_ = 0;
         if (current_index_ >= 0 && current_index_ < static_cast<int>(images_.size())) {
             LoadImageByIndex(current_index_, false);
         }
@@ -1002,6 +1005,7 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
     }
     if (thumbnail_draw_scales_.size() != images_.size()) {
         thumbnail_draw_scales_.assign(images_.size(), 0.0f);
+        film_strip_scale_anim_tick_ = 0;
     }
 
     const float padding_x = 12.0f;
@@ -1036,14 +1040,38 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
         return target_scale;
     };
 
-    std::vector<float> target_scales(image_count, kFilmStripSmallScale);
+    ULONGLONG elapsed_ms = kInteractiveFrameIntervalMs;
+    const ULONGLONG now = GetTickCount64();
+    if (film_strip_scale_anim_tick_ > 0 && now >= film_strip_scale_anim_tick_) {
+        elapsed_ms = now - film_strip_scale_anim_tick_;
+    }
+    film_strip_scale_anim_tick_ = now;
+    elapsed_ms = Clamp<ULONGLONG>(elapsed_ms, 1, kFilmStripAnimMaxDeltaMs);
+    const float max_scale_step = kFilmStripScaleUnitsPerSecond * (static_cast<float>(elapsed_ms) / 1000.0f);
+
     std::vector<float> layout_widths(image_count, medium_item_w * kFilmStripSmallScale);
+    bool has_pending_scale_animation = false;
     for (int i = 0; i < image_count; ++i) {
         const float target_scale = compute_target_scale(i);
-        target_scales[i] = target_scale;
-        const float previous_scale = thumbnail_draw_scales_[i];
-        const float layout_scale = (previous_scale > 0.0f) ? std::max(previous_scale, target_scale) : target_scale;
-        layout_widths[i] = medium_item_w * layout_scale;
+        float draw_scale = thumbnail_draw_scales_[i];
+        if (draw_scale <= 0.0f) {
+            draw_scale = target_scale;
+        } else {
+            const float delta = target_scale - draw_scale;
+            if (std::fabs(delta) <= kFilmStripScaleSnapEpsilon) {
+                draw_scale = target_scale;
+            } else {
+                const float step = std::min(std::fabs(delta), max_scale_step);
+                draw_scale += (delta > 0.0f) ? step : -step;
+                if (std::fabs(target_scale - draw_scale) <= kFilmStripScaleSnapEpsilon) {
+                    draw_scale = target_scale;
+                } else {
+                    has_pending_scale_animation = true;
+                }
+            }
+        }
+        thumbnail_draw_scales_[i] = draw_scale;
+        layout_widths[i] = medium_item_w * draw_scale;
     }
 
     auto fits_width = [&](float content_width, float candidate_width) {
@@ -1099,27 +1127,15 @@ void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {
     }
 
     const int visible_count = std::max(0, end - start);
-    bool has_pending_scale_animation = false;
 
     std::vector<float> draw_scales;
     std::vector<float> draw_widths;
     draw_scales.reserve(visible_count);
     draw_widths.reserve(visible_count);
     for (int i = start; i < end; ++i) {
-        const float target_scale = target_scales[i];
-        float draw_scale = target_scale;
-        const float previous_scale = thumbnail_draw_scales_[i];
-        if (previous_scale > 0.0f) {
-            draw_scale = previous_scale + (target_scale - previous_scale) * kFilmStripScaleLerp;
-            if (std::fabs(target_scale - draw_scale) < 0.01f) {
-                draw_scale = target_scale;
-            } else {
-                has_pending_scale_animation = true;
-            }
-        }
-        thumbnail_draw_scales_[i] = draw_scale;
+        const float draw_scale = thumbnail_draw_scales_[i];
         draw_scales.push_back(draw_scale);
-        draw_widths.push_back(medium_item_w * draw_scale);
+        draw_widths.push_back(layout_widths[i]);
     }
 
     float content_width = 0.0f;
