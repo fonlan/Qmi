@@ -485,9 +485,12 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
     constexpr int kColorPreviewHeight = 24;
     constexpr int kColorButtonWidth = 110;
     constexpr int kColorGap = 10;
-    const int color_preview_y = panel_y + 102;
+    const int color_row_y = panel_y + 102;
+    const int color_preview_y = color_row_y;
+    const int color_label_y = color_row_y + 1;
     const int color_button_x = std::max(general_x, general_x + text_width - kColorButtonWidth);
     const int color_preview_x = std::max(general_x, color_button_x - kColorGap - kColorPreviewWidth);
+    const int color_label_width = std::max(1, color_preview_x - general_x - kColorGap);
 
     MoveWindow(state->opacity_label, general_x, opacity_label_y, text_width, 22, TRUE);
     MoveWindow(state->opacity_slider, general_x, opacity_slider_y, opacity_slider_width, 30, TRUE);
@@ -497,7 +500,7 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
                kOpacityValueWidth,
                22,
                TRUE);
-    MoveWindow(state->background_color_label, general_x, panel_y + 78, text_width, 22, TRUE);
+    MoveWindow(state->background_color_label, general_x, color_label_y, color_label_width, 22, TRUE);
     MoveWindow(state->background_color_preview, color_preview_x, color_preview_y, kColorPreviewWidth, kColorPreviewHeight, TRUE);
     MoveWindow(state->background_color_button, color_button_x, color_preview_y - 1, kColorButtonWidth, 26, TRUE);
     MoveWindow(state->fit_checkbox, general_x, panel_y + 140, text_width, 28, TRUE);
