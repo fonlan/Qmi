@@ -1,5 +1,12 @@
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
 
 #include <d2d1_3.h>
@@ -294,4 +301,3 @@ private:
     UINT layered_height_ = 0;
     UINT layered_stride_ = 0;
 };
-

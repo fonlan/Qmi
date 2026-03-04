@@ -1,5 +1,12 @@
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
 #include <wincodec.h>
 
@@ -45,4 +52,3 @@ void CompositeFrame(std::vector<std::uint8_t>& canvas,
                     UINT offset_y);
 
 std::optional<std::filesystem::path> FindFirstSupportedImageInDirectory(const std::filesystem::path& directory);
-

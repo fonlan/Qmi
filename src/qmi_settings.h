@@ -1,5 +1,12 @@
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include <windows.h>
 
 #include <array>
@@ -93,4 +100,3 @@ void SetAllAssociationSelections(SettingsWindowState* state, bool checked);
 bool ApplyAssociationSelectionFromUi(SettingsWindowState* state, std::wstring* out_message);
 void SetActiveSettingsPage(SettingsWindowState* state, int page_index);
 void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state);
-
