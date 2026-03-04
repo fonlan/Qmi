@@ -1,16 +1,26 @@
 #include "qmi_utils.h"
 
+#include <shlobj.h>
+
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <cwchar>
 #include <cwctype>
+#include <fstream>
 
 namespace fs = std::filesystem;
 
 namespace {
 constexpr int kAppIconResourceId = 101;
+constexpr char kConfigFitOnSwitchKey[] = "\"fit_on_switch\"";
+constexpr char kConfigSmoothSamplingKey[] = "\"smooth_sampling\"";
+constexpr char kConfigTrueLiteral[] = "true";
+constexpr char kConfigFalseLiteral[] = "false";
+constexpr wchar_t kConfigSubdirectory[] = L"Qmi";
+constexpr wchar_t kConfigFileName[] = L"config.json";
 
 inline void BlendPremultipliedPixel(std::uint8_t* dst, const std::uint8_t* src) {
     const UINT src_a = src[3];
@@ -30,6 +40,71 @@ inline void BlendPremultipliedPixel(std::uint8_t* dst, const std::uint8_t* src) 
     dst[1] = static_cast<std::uint8_t>(src[1] + ((static_cast<UINT>(dst[1]) * inv_src_a + 127u) / 255u));
     dst[2] = static_cast<std::uint8_t>(src[2] + ((static_cast<UINT>(dst[2]) * inv_src_a + 127u) / 255u));
     dst[3] = static_cast<std::uint8_t>(src_a + ((static_cast<UINT>(dst[3]) * inv_src_a + 127u) / 255u));
+}
+
+bool IsJsonValueBoundary(char c) {
+    return std::isspace(static_cast<unsigned char>(c)) || c == ',' || c == '}' || c == '\0';
+}
+
+bool TryParseJsonBoolean(const std::string& json, const char* key_literal, bool* out_value) {
+    if (!key_literal || !out_value) {
+        return false;
+    }
+
+    const size_t key_pos = json.find(key_literal);
+    if (key_pos == std::string::npos) {
+        return false;
+    }
+
+    const size_t colon_pos = json.find(':', key_pos + std::strlen(key_literal));
+    if (colon_pos == std::string::npos) {
+        return false;
+    }
+
+    size_t value_pos = colon_pos + 1;
+    while (value_pos < json.size() && std::isspace(static_cast<unsigned char>(json[value_pos]))) {
+        ++value_pos;
+    }
+    if (value_pos >= json.size()) {
+        return false;
+    }
+
+    if (json.compare(value_pos, std::strlen(kConfigTrueLiteral), kConfigTrueLiteral) == 0) {
+        const size_t boundary_pos = value_pos + std::strlen(kConfigTrueLiteral);
+        if (boundary_pos >= json.size() || IsJsonValueBoundary(json[boundary_pos])) {
+            *out_value = true;
+            return true;
+        }
+    }
+    if (json.compare(value_pos, std::strlen(kConfigFalseLiteral), kConfigFalseLiteral) == 0) {
+        const size_t boundary_pos = value_pos + std::strlen(kConfigFalseLiteral);
+        if (boundary_pos >= json.size() || IsJsonValueBoundary(json[boundary_pos])) {
+            *out_value = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<fs::path> GetUserConfigPath(bool create_parent_dir) {
+    PWSTR roaming_path = nullptr;
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, nullptr, &roaming_path)) || !roaming_path) {
+        return std::nullopt;
+    }
+
+    fs::path config_dir(roaming_path);
+    CoTaskMemFree(roaming_path);
+    config_dir /= kConfigSubdirectory;
+
+    if (create_parent_dir) {
+        std::error_code mkdir_ec;
+        fs::create_directories(config_dir, mkdir_ec);
+        if (mkdir_ec) {
+            return std::nullopt;
+        }
+    }
+
+    return config_dir / kConfigFileName;
 }
 }  // namespace
 
@@ -268,3 +343,77 @@ std::optional<fs::path> FindFirstSupportedImageInDirectory(const fs::path& direc
     return std::nullopt;
 }
 
+bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling) {
+    if (!out_fit_on_switch || !out_smooth_sampling) {
+        return false;
+    }
+
+    const std::optional<fs::path> config_path = GetUserConfigPath(false);
+    if (!config_path.has_value()) {
+        return false;
+    }
+
+    std::error_code exists_ec;
+    if (!fs::exists(*config_path, exists_ec)) {
+        return !exists_ec;
+    }
+    if (exists_ec) {
+        return false;
+    }
+
+    std::ifstream file(*config_path, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+    const std::string json((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (file.bad()) {
+        return false;
+    }
+
+    bool parsed_fit = *out_fit_on_switch;
+    if (TryParseJsonBoolean(json, kConfigFitOnSwitchKey, &parsed_fit)) {
+        *out_fit_on_switch = parsed_fit;
+    }
+
+    bool parsed_smooth = *out_smooth_sampling;
+    if (TryParseJsonBoolean(json, kConfigSmoothSamplingKey, &parsed_smooth)) {
+        *out_smooth_sampling = parsed_smooth;
+    }
+    return true;
+}
+
+bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling) {
+    const std::optional<fs::path> config_path = GetUserConfigPath(true);
+    if (!config_path.has_value()) {
+        return false;
+    }
+
+    fs::path temp_path = *config_path;
+    temp_path += L".tmp";
+
+    {
+        std::ofstream file(temp_path, std::ios::binary | std::ios::trunc);
+        if (!file.is_open()) {
+            return false;
+        }
+
+        file << "{\n";
+        file << "  \"version\": 1,\n";
+        file << "  \"fit_on_switch\": " << (fit_on_switch ? "true" : "false") << ",\n";
+        file << "  \"smooth_sampling\": " << (smooth_sampling ? "true" : "false") << "\n";
+        file << "}\n";
+
+        if (!file.good()) {
+            return false;
+        }
+    }
+
+    if (!MoveFileExW(temp_path.c_str(),
+                     config_path->c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileW(temp_path.c_str());
+        return false;
+    }
+
+    return true;
+}

@@ -52,3 +52,6 @@ void CompositeFrame(std::vector<std::uint8_t>& canvas,
                     UINT offset_y);
 
 std::optional<std::filesystem::path> FindFirstSupportedImageInDirectory(const std::filesystem::path& directory);
+
+bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling);
+bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling);

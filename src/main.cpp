@@ -136,6 +136,8 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
         return false;
     }
 
+    LoadUserConfig(&fit_on_switch_, &smooth_sampling_);
+
     if (!InitDeviceIndependentResources()) {
         return false;
     }
@@ -2063,11 +2065,17 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
             }
             if (app && HIWORD(wparam) == BN_CLICKED) {
+                bool should_save_user_config = false;
                 if (LOWORD(wparam) == kCtrlFitOnSwitch && lparam) {
                     app->fit_on_switch_ = SendMessageW(reinterpret_cast<HWND>(lparam), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    should_save_user_config = true;
                 } else if (LOWORD(wparam) == kCtrlSmoothSampling && lparam) {
                     app->smooth_sampling_ =
                         SendMessageW(reinterpret_cast<HWND>(lparam), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                    should_save_user_config = true;
+                }
+                if (should_save_user_config) {
+                    SaveUserConfig(app->fit_on_switch_, app->smooth_sampling_);
                 }
                 InvalidateRect(app->hwnd_, nullptr, FALSE);
             }
