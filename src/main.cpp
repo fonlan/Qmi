@@ -85,6 +85,7 @@ constexpr UINT kMenuRotateClockwise = 1009;
 constexpr UINT kMenuRotateCounterclockwise = 1010;
 constexpr UINT kMenuFlipHorizontal = 1011;
 constexpr UINT kMenuFlipVertical = 1012;
+constexpr UINT kMenuPrintImage = 1013;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 constexpr UINT_PTR kAnimationTimerId = 3;
@@ -1536,6 +1537,13 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 if (IsRenderableImageType(current_image_.type)) {
                     CopyCurrentImageToClipboard();
                 }
+            } else if (ctrl_down && wparam == 'P') {
+                if (!current_image_.path.empty() && !PrintCurrentImage()) {
+                    MessageBoxW(hwnd_,
+                                L"\u6253\u5370\u56fe\u7247\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u7cfb\u7edf\u5df2\u914d\u7f6e\u6253\u5370\u673a\uff0c\u5e76\u5177\u6709\u53ef\u7528\u7684\u9ed8\u8ba4\u6253\u5370\u7a0b\u5e8f\u3002",
+                                L"Qmi",
+                                MB_ICONERROR | MB_OK);
+                }
             } else if (wparam == VK_DELETE) {
                 if (!current_image_.path.empty() && !MoveCurrentFileToRecycleBin()) {
                     MessageBoxW(hwnd_,
@@ -1609,6 +1617,14 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                     if (!OpenCurrentImageInFolder()) {
                         MessageBoxW(hwnd_,
                                     L"\u6253\u5f00\u6240\u5728\u6587\u4ef6\u5939\u5931\u8d25\uff0c\u6587\u4ef6\u53ef\u80fd\u4e0d\u5b58\u5728\u6216\u8def\u5f84\u4e0d\u53ef\u8bbf\u95ee\u3002",
+                                    L"Qmi",
+                                    MB_ICONERROR | MB_OK);
+                    }
+                    return 0;
+                case kMenuPrintImage:
+                    if (!PrintCurrentImage()) {
+                        MessageBoxW(hwnd_,
+                                    L"\u6253\u5370\u56fe\u7247\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u7cfb\u7edf\u5df2\u914d\u7f6e\u6253\u5370\u673a\uff0c\u5e76\u5177\u6709\u53ef\u7528\u7684\u9ed8\u8ba4\u6253\u5370\u7a0b\u5e8f\u3002",
                                     L"Qmi",
                                     MB_ICONERROR | MB_OK);
                     }

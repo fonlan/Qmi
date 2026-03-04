@@ -172,6 +172,7 @@ private:
     void OpenFileDialog();
     void OpenSettingsWindow();
     bool OpenCurrentImageInFolder();
+    bool PrintCurrentImage();
     bool CopyCurrentImageToClipboard();
     bool CopyCurrentFileToClipboard();
     bool CopyCurrentImagePathToClipboard();

@@ -26,6 +26,7 @@ constexpr UINT kMenuRotateClockwise = 1009;
 constexpr UINT kMenuRotateCounterclockwise = 1010;
 constexpr UINT kMenuFlipHorizontal = 1011;
 constexpr UINT kMenuFlipVertical = 1012;
+constexpr UINT kMenuPrintImage = 1013;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 
 bool IsRenderableImageTypeForActions(ImageType type) {
@@ -435,6 +436,29 @@ bool QmiApp::OpenCurrentImageInFolder() {
     return reinterpret_cast<INT_PTR>(shell_result) > 32;
 }
 
+bool QmiApp::PrintCurrentImage() {
+    if (current_image_.path.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    fs::path target_path = fs::absolute(current_image_.path, ec);
+    if (ec) {
+        target_path = current_image_.path;
+    }
+    if (!fs::is_regular_file(target_path, ec) || ec) {
+        return false;
+    }
+
+    const std::wstring file_path = target_path.lexically_normal().wstring();
+    if (file_path.empty()) {
+        return false;
+    }
+
+    const HINSTANCE shell_result = ShellExecuteW(hwnd_, L"print", file_path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(shell_result) > 32;
+}
+
 bool QmiApp::MoveCurrentFileToRecycleBin() {
     if (current_image_.path.empty()) {
         return false;
@@ -542,12 +566,14 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     const bool can_copy_path = can_copy_file;
     const bool can_delete_file = can_copy_file;
     const bool can_open_containing_folder = can_copy_file;
+    const bool can_print_image = can_copy_file;
     const bool can_transform_image = IsRenderableImageTypeForActions(current_image_.type);
     AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00\u56fe\u7247");
     AppendMenuW(menu,
                 can_open_containing_folder ? MF_STRING : (MF_STRING | MF_GRAYED),
                 kMenuOpenContainingFolder,
                 L"\u6253\u5f00\u6240\u5728\u6587\u4ef6\u5939");
+    AppendMenuW(menu, can_print_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuPrintImage, L"\u6253\u5370\u56fe\u7247");
     AppendMenuW(menu, can_copy_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImage, L"\u590d\u5236\u56fe\u7247");
     AppendMenuW(menu, can_copy_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyFile, L"\u590d\u5236\u6587\u4ef6");
     AppendMenuW(menu, can_copy_path ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImagePath, L"\u590d\u5236\u56fe\u7247\u8def\u5f84");
@@ -586,6 +612,14 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
             if (!OpenCurrentImageInFolder()) {
                 MessageBoxW(hwnd_,
                             L"\u6253\u5f00\u6240\u5728\u6587\u4ef6\u5939\u5931\u8d25\uff0c\u6587\u4ef6\u53ef\u80fd\u4e0d\u5b58\u5728\u6216\u8def\u5f84\u4e0d\u53ef\u8bbf\u95ee\u3002",
+                            L"Qmi",
+                            MB_ICONERROR | MB_OK);
+            }
+            break;
+        case kMenuPrintImage:
+            if (!PrintCurrentImage()) {
+                MessageBoxW(hwnd_,
+                            L"\u6253\u5370\u56fe\u7247\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u7cfb\u7edf\u5df2\u914d\u7f6e\u6253\u5370\u673a\uff0c\u5e76\u5177\u6709\u53ef\u7528\u7684\u9ed8\u8ba4\u6253\u5370\u7a0b\u5e8f\u3002",
                             L"Qmi",
                             MB_ICONERROR | MB_OK);
             }
@@ -629,4 +663,3 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
             break;
     }
 }
-
