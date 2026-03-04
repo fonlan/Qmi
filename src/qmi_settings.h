@@ -66,6 +66,9 @@ struct SettingsWindowState {
 
     HWND fit_checkbox = nullptr;
     HWND smooth_checkbox = nullptr;
+    HWND opacity_label = nullptr;
+    HWND opacity_slider = nullptr;
+    HWND opacity_value_label = nullptr;
 
     HWND associations_hint = nullptr;
     std::vector<HWND> association_checkboxes;

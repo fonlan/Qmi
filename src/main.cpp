@@ -70,6 +70,9 @@
 #ifndef DWMSBT_NONE
 #define DWMSBT_NONE 1
 #endif
+#ifndef TBS_TRANSPARENTBKGND
+#define TBS_TRANSPARENTBKGND 0x1000
+#endif
 
 namespace {
 constexpr wchar_t kMainClassName[] = L"QmiMainWindowClass";
@@ -92,6 +95,9 @@ constexpr UINT_PTR kAnimationTimerId = 3;
 
 constexpr int kCtrlFitOnSwitch = 2001;
 constexpr int kCtrlSmoothSampling = 2002;
+constexpr int kCtrlWindowOpacitySlider = 2003;
+constexpr int kCtrlWindowOpacityLabel = 2004;
+constexpr int kCtrlWindowOpacityValue = 2005;
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -102,10 +108,11 @@ constexpr float kViewportMargin = 0.0f;
 constexpr float kViewportBottomGap = 0.0f;
 constexpr ULONGLONG kInteractiveFrameIntervalMs = 16;
 constexpr int kThumbnailDecodeBudgetPerFrame = 1;
-constexpr BYTE kUiChromeAlpha = 200;
-constexpr float kUiChromeOpacity = static_cast<float>(kUiChromeAlpha) / 255.0f;
-constexpr float kViewportLetterboxOpacity = 0.50f;
-constexpr float kThumbnailCellOpacity = 0.58f;
+constexpr float kHoverOverlayOpacity = 0.14f;
+constexpr float kCloseHoverOverlayOpacity = 0.82f;
+constexpr float kOpenButtonFillOpacity = 200.0f / 255.0f;
+constexpr float kOpenButtonHoverOpacity = 0.14f;
+constexpr float kOpenButtonStrokeOpacity = 200.0f / 255.0f;
 constexpr float kFilmStripLargeScale = 1.08f;
 constexpr float kFilmStripMediumScale = 1.00f;
 constexpr float kFilmStripSmallScale = 0.74f;
@@ -115,6 +122,36 @@ constexpr float kFilmStripScaleLerp = 0.28f;
 template <typename T>
 T Clamp(T v, T lo, T hi) {
     return std::max(lo, std::min(v, hi));
+}
+
+int ClampWindowOpacityPercent(int percent) {
+    return Clamp(percent, kMinWindowOpacityPercent, kMaxWindowOpacityPercent);
+}
+
+float GetBackgroundOpacityScale(int percent) {
+    return static_cast<float>(ClampWindowOpacityPercent(percent)) / 100.0f;
+}
+
+std::wstring FormatWindowOpacityPercentText(int percent) {
+    return std::to_wstring(ClampWindowOpacityPercent(percent)) + L"%";
+}
+
+void UpdateWindowOpacityLabel(SettingsWindowState* state, int percent) {
+    if (!state || !state->opacity_value_label) {
+        return;
+    }
+
+    HWND label_hwnd = state->opacity_value_label;
+    const std::wstring text = FormatWindowOpacityPercentText(percent);
+    SetWindowTextW(label_hwnd, text.c_str());
+
+    HWND parent_hwnd = GetParent(label_hwnd);
+    RECT label_rect{};
+    if (parent_hwnd && GetWindowRect(label_hwnd, &label_rect)) {
+        MapWindowPoints(nullptr, parent_hwnd, reinterpret_cast<POINT*>(&label_rect), 2);
+        RedrawWindow(parent_hwnd, &label_rect, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    }
+    RedrawWindow(label_hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
 }
 
 bool IsRenderableImageType(ImageType type) {
@@ -132,12 +169,12 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
 
     INITCOMMONCONTROLSEX common_controls{};
     common_controls.dwSize = sizeof(common_controls);
-    common_controls.dwICC = ICC_LISTVIEW_CLASSES;
+    common_controls.dwICC = ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
     if (!InitCommonControlsEx(&common_controls)) {
         return false;
     }
 
-    LoadUserConfig(&fit_on_switch_, &smooth_sampling_);
+    LoadUserConfig(&fit_on_switch_, &smooth_sampling_, &window_opacity_percent_);
 
     if (!InitDeviceIndependentResources()) {
         return false;
@@ -499,14 +536,40 @@ void QmiApp::CreateBrushes() {
     }
 
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xF0F0F0, 0.97f), &brush_text_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x171717, kUiChromeOpacity), &brush_panel_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x101010, kUiChromeOpacity), &brush_overlay_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x171717, 1.0f), &brush_panel_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x101010, 1.0f), &brush_overlay_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x49A1FF, 1.0f), &brush_accent_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xFFFFFF, 0.14f), &brush_hover_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xE81123, 0.82f), &brush_close_hover_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x111111, kViewportLetterboxOpacity), &brush_viewport_bg_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xFFFFFF, 1.0f), &brush_hover_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xE81123, 1.0f), &brush_close_hover_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x171717, kOpenButtonFillOpacity), &brush_open_button_fill_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0xFFFFFF, kOpenButtonHoverOpacity), &brush_open_button_hover_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x101010, kOpenButtonStrokeOpacity), &brush_open_button_stroke_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x111111, 1.0f), &brush_viewport_bg_);
     d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x111111, 1.0f), &brush_image_bg_);
-    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x6D7685, kThumbnailCellOpacity), &brush_thumb_bg_);
+    d2d_context_->CreateSolidColorBrush(D2D1::ColorF(0x6D7685, 1.0f), &brush_thumb_bg_);
+    UpdateBackgroundOpacityBrushes();
+}
+
+void QmiApp::UpdateBackgroundOpacityBrushes() {
+    const float opacity_scale = GetBackgroundOpacityScale(window_opacity_percent_);
+    if (brush_panel_) {
+        brush_panel_->SetOpacity(opacity_scale);
+    }
+    if (brush_overlay_) {
+        brush_overlay_->SetOpacity(opacity_scale);
+    }
+    if (brush_hover_) {
+        brush_hover_->SetOpacity(kHoverOverlayOpacity * opacity_scale);
+    }
+    if (brush_close_hover_) {
+        brush_close_hover_->SetOpacity(kCloseHoverOverlayOpacity * opacity_scale);
+    }
+    if (brush_viewport_bg_) {
+        brush_viewport_bg_->SetOpacity(opacity_scale);
+    }
+    if (brush_thumb_bg_) {
+        brush_thumb_bg_->SetOpacity(opacity_scale);
+    }
 }
 
 void QmiApp::DiscardDeviceResources() {
@@ -532,6 +595,9 @@ void QmiApp::DiscardDeviceResources() {
     brush_accent_.Reset();
     brush_hover_.Reset();
     brush_close_hover_.Reset();
+    brush_open_button_fill_.Reset();
+    brush_open_button_hover_.Reset();
+    brush_open_button_stroke_.Reset();
     brush_viewport_bg_.Reset();
     brush_image_bg_.Reset();
     brush_thumb_bg_.Reset();
@@ -746,7 +812,7 @@ void QmiApp::DrawEdgeNavButtons(const D2D1_RECT_F& viewport) {
 }
 
 void QmiApp::DrawOpenButton(const D2D1_RECT_F& viewport) {
-    if (!d2d_context_ || !brush_panel_ || !brush_text_) {
+    if (!d2d_context_ || !brush_open_button_fill_ || !brush_open_button_stroke_ || !brush_text_) {
         return;
     }
     if (current_image_.type != ImageType::None) {
@@ -756,15 +822,15 @@ void QmiApp::DrawOpenButton(const D2D1_RECT_F& viewport) {
     const D2D1_RECT_F button_rect = GetOpenButtonRect(viewport);
     const D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(button_rect, 10.0f, 10.0f);
 
-    d2d_context_->FillRoundedRectangle(rounded, brush_panel_.Get());
-    if (hover_open_button_ && brush_hover_) {
-        d2d_context_->FillRoundedRectangle(rounded, brush_hover_.Get());
+    d2d_context_->FillRoundedRectangle(rounded, brush_open_button_fill_.Get());
+    if (hover_open_button_ && brush_open_button_hover_) {
+        d2d_context_->FillRoundedRectangle(rounded, brush_open_button_hover_.Get());
     }
 
     if (pressed_open_button_ && brush_accent_) {
         d2d_context_->DrawRoundedRectangle(rounded, brush_accent_.Get(), 2.0f);
-    } else if (brush_overlay_) {
-        d2d_context_->DrawRoundedRectangle(rounded, brush_overlay_.Get(), 1.0f);
+    } else if (brush_open_button_stroke_) {
+        d2d_context_->DrawRoundedRectangle(rounded, brush_open_button_stroke_.Get(), 1.0f);
     }
 
     DrawCenteredText(L"\u6253\u5f00\u56fe\u7247", button_rect, text_format_.Get());
@@ -1791,11 +1857,60 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                      reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlSmoothSampling)),
                                                      nullptr,
                                                      nullptr);
+            state->opacity_label = CreateWindowExW(0,
+                                                   L"STATIC",
+                                                   L"\u80cc\u666f\u900f\u660e\u5ea6",
+                                                   WS_CHILD | WS_VISIBLE,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   0,
+                                                   hwnd,
+                                                   reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowOpacityLabel)),
+                                                   nullptr,
+                                                   nullptr);
+            state->opacity_slider = CreateWindowExW(0,
+                                                    TRACKBAR_CLASSW,
+                                                    nullptr,
+                                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_AUTOTICKS |
+                                                        TBS_TRANSPARENTBKGND,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    0,
+                                                    hwnd,
+                                                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowOpacitySlider)),
+                                                    nullptr,
+                                                    nullptr);
+            state->opacity_value_label = CreateWindowExW(0,
+                                                         L"STATIC",
+                                                         L"100%",
+                                                         WS_CHILD | WS_VISIBLE | SS_RIGHT,
+                                                         0,
+                                                         0,
+                                                         0,
+                                                         0,
+                                                         hwnd,
+                                                         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowOpacityValue)),
+                                                         nullptr,
+                                                         nullptr);
             SendMessageW(state->fit_checkbox, BM_SETCHECK, app && app->fit_on_switch_ ? BST_CHECKED : BST_UNCHECKED, 0);
             SendMessageW(state->smooth_checkbox,
                          BM_SETCHECK,
                          app && app->smooth_sampling_ ? BST_CHECKED : BST_UNCHECKED,
                          0);
+            if (state->opacity_slider) {
+                SendMessageW(state->opacity_slider, TBM_SETRANGEMIN, FALSE, kMinWindowOpacityPercent);
+                SendMessageW(state->opacity_slider, TBM_SETRANGEMAX, TRUE, kMaxWindowOpacityPercent);
+                SendMessageW(state->opacity_slider, TBM_SETTICFREQ, 10, 0);
+                SendMessageW(state->opacity_slider, TBM_SETLINESIZE, 0, 1);
+                SendMessageW(state->opacity_slider, TBM_SETPAGESIZE, 0, 5);
+                SendMessageW(state->opacity_slider,
+                             TBM_SETPOS,
+                             TRUE,
+                             app ? ClampWindowOpacityPercent(app->window_opacity_percent_) : kMaxWindowOpacityPercent);
+            }
+            UpdateWindowOpacityLabel(state, app ? app->window_opacity_percent_ : kMaxWindowOpacityPercent);
 
             state->associations_hint = CreateWindowExW(0,
                                                        L"STATIC",
@@ -1964,6 +2079,8 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             SetControlFont(state->nav_list, state->nav_font);
             SetControlFont(state->fit_checkbox, state->body_font);
             SetControlFont(state->smooth_checkbox, state->body_font);
+            SetControlFont(state->opacity_label, state->body_font);
+            SetControlFont(state->opacity_value_label, state->body_font);
             SetControlFont(state->associations_hint, state->body_font);
             for (HWND checkbox : state->association_checkboxes) {
                 SetControlFont(checkbox, state->body_font);
@@ -2091,11 +2208,25 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     should_save_user_config = true;
                 }
                 if (should_save_user_config) {
-                    SaveUserConfig(app->fit_on_switch_, app->smooth_sampling_);
+                    SaveUserConfig(app->fit_on_switch_, app->smooth_sampling_, app->window_opacity_percent_);
                 }
                 InvalidateRect(app->hwnd_, nullptr, FALSE);
             }
             return 0;
+        case WM_HSCROLL:
+            if (state && app && state->opacity_slider && reinterpret_cast<HWND>(lparam) == state->opacity_slider) {
+                const LRESULT slider_pos = SendMessageW(state->opacity_slider, TBM_GETPOS, 0, 0);
+                const int new_opacity_percent = ClampWindowOpacityPercent(static_cast<int>(slider_pos));
+                UpdateWindowOpacityLabel(state, new_opacity_percent);
+                if (new_opacity_percent != app->window_opacity_percent_) {
+                    app->window_opacity_percent_ = new_opacity_percent;
+                    app->UpdateBackgroundOpacityBrushes();
+                    SaveUserConfig(app->fit_on_switch_, app->smooth_sampling_, app->window_opacity_percent_);
+                    app->RequestRender();
+                }
+                return 0;
+            }
+            break;
         case WM_SETCURSOR:
             if (state && state->about_repo_link && reinterpret_cast<HWND>(wparam) == state->about_repo_link) {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
@@ -2113,11 +2244,15 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
         case WM_CTLCOLORBTN:
             if (state) {
                 const HWND ctrl = reinterpret_cast<HWND>(lparam);
+                HDC hdc = reinterpret_cast<HDC>(wparam);
+                if (ctrl == state->opacity_slider) {
+                    SetBkMode(hdc, TRANSPARENT);
+                    return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+                }
                 if (ctrl == state->association_select_all_button || ctrl == state->association_clear_all_button ||
                     ctrl == state->association_apply_button) {
                     break;
                 }
-                HDC hdc = reinterpret_cast<HDC>(wparam);
                 bool is_association_checkbox = false;
                 for (HWND checkbox : state->association_checkboxes) {
                     if (ctrl == checkbox) {
@@ -2138,6 +2273,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
 
                 const bool is_panel_ctrl = ctrl == state->fit_checkbox || ctrl == state->smooth_checkbox ||
+                                           ctrl == state->opacity_label || ctrl == state->opacity_value_label ||
                                            ctrl == state->associations_hint || ctrl == state->association_status ||
                                            ctrl == state->about_description || ctrl == state->about_author ||
                                            ctrl == state->about_repo_label || is_association_checkbox;

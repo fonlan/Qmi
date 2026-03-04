@@ -383,6 +383,9 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
 
     ShowWindow(state->fit_checkbox, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->smooth_checkbox, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->opacity_label, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->opacity_slider, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->opacity_value_label, show_general ? SW_SHOW : SW_HIDE);
 
     ShowWindow(state->associations_hint, show_associations ? SW_SHOW : SW_HIDE);
     ShowWindow(state->association_select_all_button, show_associations ? SW_SHOW : SW_HIDE);
@@ -436,8 +439,23 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
     const int panel_height = std::max(120, client_height - (kOuterPadding * 2));
 
     const int text_width = std::max(80, panel_width - kPanelPaddingX * 2);
-    MoveWindow(state->fit_checkbox, panel_x + kPanelPaddingX, panel_y + 8, text_width, 28, TRUE);
-    MoveWindow(state->smooth_checkbox, panel_x + kPanelPaddingX, panel_y + 44, text_width, 28, TRUE);
+    const int general_x = panel_x + kPanelPaddingX;
+    const int opacity_label_y = panel_y + 8;
+    const int opacity_slider_y = opacity_label_y + 24;
+    constexpr int kOpacityValueWidth = 56;
+    constexpr int kOpacityValueGap = 8;
+    const int opacity_slider_width = std::max(80, text_width - kOpacityValueWidth - kOpacityValueGap);
+
+    MoveWindow(state->opacity_label, general_x, opacity_label_y, text_width, 22, TRUE);
+    MoveWindow(state->opacity_slider, general_x, opacity_slider_y, opacity_slider_width, 30, TRUE);
+    MoveWindow(state->opacity_value_label,
+               general_x + opacity_slider_width + kOpacityValueGap,
+               opacity_slider_y + 4,
+               kOpacityValueWidth,
+               22,
+               TRUE);
+    MoveWindow(state->fit_checkbox, general_x, panel_y + 78, text_width, 28, TRUE);
+    MoveWindow(state->smooth_checkbox, general_x, panel_y + 114, text_width, 28, TRUE);
 
     const int association_hint_y = panel_y + 8;
     MoveWindow(state->associations_hint, panel_x + kPanelPaddingX, association_hint_y, text_width, 44, TRUE);

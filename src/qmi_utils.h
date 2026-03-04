@@ -53,5 +53,8 @@ void CompositeFrame(std::vector<std::uint8_t>& canvas,
 
 std::optional<std::filesystem::path> FindFirstSupportedImageInDirectory(const std::filesystem::path& directory);
 
-bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling);
-bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling);
+inline constexpr int kMinWindowOpacityPercent = 1;
+inline constexpr int kMaxWindowOpacityPercent = 100;
+
+bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling, int* out_window_opacity_percent);
+bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling, int window_opacity_percent);

@@ -105,6 +105,7 @@ private:
     void DiscardDeviceResources();
     void ReleaseLayeredBitmap();
     void CreateBrushes();
+    void UpdateBackgroundOpacityBrushes();
     void ApplyWindowBackdrop();
     void ResetView();
     void UpdateCurrentImageInfo();
@@ -232,6 +233,9 @@ private:
     ComPtr<ID2D1SolidColorBrush> brush_accent_;
     ComPtr<ID2D1SolidColorBrush> brush_hover_;
     ComPtr<ID2D1SolidColorBrush> brush_close_hover_;
+    ComPtr<ID2D1SolidColorBrush> brush_open_button_fill_;
+    ComPtr<ID2D1SolidColorBrush> brush_open_button_hover_;
+    ComPtr<ID2D1SolidColorBrush> brush_open_button_stroke_;
     ComPtr<ID2D1SolidColorBrush> brush_viewport_bg_;
     ComPtr<ID2D1SolidColorBrush> brush_image_bg_;
     ComPtr<ID2D1SolidColorBrush> brush_thumb_bg_;
@@ -262,6 +266,7 @@ private:
 
     bool fit_on_switch_ = true;
     bool smooth_sampling_ = true;
+    int window_opacity_percent_ = 100;
     int film_strip_height_ = 120;
     int film_strip_scroll_index_ = -1;
 

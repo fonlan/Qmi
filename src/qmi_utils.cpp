@@ -10,6 +10,7 @@
 #include <cwchar>
 #include <cwctype>
 #include <fstream>
+#include <limits>
 
 namespace fs = std::filesystem;
 
@@ -17,6 +18,7 @@ namespace {
 constexpr int kAppIconResourceId = 101;
 constexpr char kConfigFitOnSwitchKey[] = "\"fit_on_switch\"";
 constexpr char kConfigSmoothSamplingKey[] = "\"smooth_sampling\"";
+constexpr char kConfigWindowOpacityPercentKey[] = "\"window_opacity_percent\"";
 constexpr char kConfigTrueLiteral[] = "true";
 constexpr char kConfigFalseLiteral[] = "false";
 constexpr wchar_t kConfigSubdirectory[] = L"Qmi";
@@ -84,6 +86,64 @@ bool TryParseJsonBoolean(const std::string& json, const char* key_literal, bool*
         }
     }
     return false;
+}
+
+bool TryParseJsonInteger(const std::string& json, const char* key_literal, int* out_value) {
+    if (!key_literal || !out_value) {
+        return false;
+    }
+
+    const size_t key_pos = json.find(key_literal);
+    if (key_pos == std::string::npos) {
+        return false;
+    }
+
+    const size_t colon_pos = json.find(':', key_pos + std::strlen(key_literal));
+    if (colon_pos == std::string::npos) {
+        return false;
+    }
+
+    size_t value_pos = colon_pos + 1;
+    while (value_pos < json.size() && std::isspace(static_cast<unsigned char>(json[value_pos]))) {
+        ++value_pos;
+    }
+    if (value_pos >= json.size()) {
+        return false;
+    }
+
+    bool negative = false;
+    if (json[value_pos] == '+' || json[value_pos] == '-') {
+        negative = json[value_pos] == '-';
+        ++value_pos;
+    }
+    if (value_pos >= json.size() || !std::isdigit(static_cast<unsigned char>(json[value_pos]))) {
+        return false;
+    }
+
+    constexpr long long kIntMax = static_cast<long long>(std::numeric_limits<int>::max());
+    constexpr long long kIntMinAbs = kIntMax + 1;
+    const long long max_abs = negative ? kIntMinAbs : kIntMax;
+
+    long long value = 0;
+    while (value_pos < json.size() && std::isdigit(static_cast<unsigned char>(json[value_pos]))) {
+        const int digit = json[value_pos] - '0';
+        if (value > (max_abs - digit) / 10) {
+            return false;
+        }
+        value = (value * 10) + digit;
+        ++value_pos;
+    }
+
+    if (value_pos < json.size() && !IsJsonValueBoundary(json[value_pos])) {
+        return false;
+    }
+
+    const long long signed_value = negative ? -value : value;
+    if (signed_value < std::numeric_limits<int>::min() || signed_value > std::numeric_limits<int>::max()) {
+        return false;
+    }
+    *out_value = static_cast<int>(signed_value);
+    return true;
 }
 
 std::optional<fs::path> GetUserConfigPath(bool create_parent_dir) {
@@ -343,8 +403,8 @@ std::optional<fs::path> FindFirstSupportedImageInDirectory(const fs::path& direc
     return std::nullopt;
 }
 
-bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling) {
-    if (!out_fit_on_switch || !out_smooth_sampling) {
+bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling, int* out_window_opacity_percent) {
+    if (!out_fit_on_switch || !out_smooth_sampling || !out_window_opacity_percent) {
         return false;
     }
 
@@ -379,14 +439,22 @@ bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling) {
     if (TryParseJsonBoolean(json, kConfigSmoothSamplingKey, &parsed_smooth)) {
         *out_smooth_sampling = parsed_smooth;
     }
+
+    int parsed_opacity_percent = *out_window_opacity_percent;
+    if (TryParseJsonInteger(json, kConfigWindowOpacityPercentKey, &parsed_opacity_percent)) {
+        *out_window_opacity_percent =
+            std::clamp(parsed_opacity_percent, kMinWindowOpacityPercent, kMaxWindowOpacityPercent);
+    }
     return true;
 }
 
-bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling) {
+bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling, int window_opacity_percent) {
     const std::optional<fs::path> config_path = GetUserConfigPath(true);
     if (!config_path.has_value()) {
         return false;
     }
+
+    const int clamped_opacity_percent = std::clamp(window_opacity_percent, kMinWindowOpacityPercent, kMaxWindowOpacityPercent);
 
     fs::path temp_path = *config_path;
     temp_path += L".tmp";
@@ -400,7 +468,8 @@ bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling) {
         file << "{\n";
         file << "  \"version\": 1,\n";
         file << "  \"fit_on_switch\": " << (fit_on_switch ? "true" : "false") << ",\n";
-        file << "  \"smooth_sampling\": " << (smooth_sampling ? "true" : "false") << "\n";
+        file << "  \"smooth_sampling\": " << (smooth_sampling ? "true" : "false") << ",\n";
+        file << "  \"window_opacity_percent\": " << clamped_opacity_percent << "\n";
         file << "}\n";
 
         if (!file.good()) {
