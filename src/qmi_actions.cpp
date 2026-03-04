@@ -27,6 +27,7 @@ constexpr UINT kMenuRotateCounterclockwise = 1010;
 constexpr UINT kMenuFlipHorizontal = 1011;
 constexpr UINT kMenuFlipVertical = 1012;
 constexpr UINT kMenuPrintImage = 1013;
+constexpr UINT kMenuToggleTopMost = 1014;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 
 bool IsRenderableImageTypeForActions(ImageType type) {
@@ -459,6 +460,26 @@ bool QmiApp::PrintCurrentImage() {
     return reinterpret_cast<INT_PTR>(shell_result) > 32;
 }
 
+bool QmiApp::IsWindowTopMost() const {
+    if (!hwnd_) {
+        return false;
+    }
+    const LONG_PTR ex_style = GetWindowLongPtrW(hwnd_, GWL_EXSTYLE);
+    return (ex_style & WS_EX_TOPMOST) != 0;
+}
+
+bool QmiApp::SetWindowTopMost(bool topmost) {
+    if (!hwnd_) {
+        return false;
+    }
+    const HWND insert_after = topmost ? HWND_TOPMOST : HWND_NOTOPMOST;
+    return SetWindowPos(hwnd_, insert_after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER) != FALSE;
+}
+
+bool QmiApp::ToggleWindowTopMost() {
+    return SetWindowTopMost(!IsWindowTopMost());
+}
+
 bool QmiApp::MoveCurrentFileToRecycleBin() {
     if (current_image_.path.empty()) {
         return false;
@@ -568,6 +589,7 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     const bool can_open_containing_folder = can_copy_file;
     const bool can_print_image = can_copy_file;
     const bool can_transform_image = IsRenderableImageTypeForActions(current_image_.type);
+    const bool is_top_most = IsWindowTopMost();
     AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00\u56fe\u7247");
     AppendMenuW(menu,
                 can_open_containing_folder ? MF_STRING : (MF_STRING | MF_GRAYED),
@@ -595,6 +617,8 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
                 can_transform_image ? MF_STRING : (MF_STRING | MF_GRAYED),
                 kMenuFlipVertical,
                 L"\u5782\u76f4\u955c\u50cf\u7ffb\u8f6c");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING | (is_top_most ? MF_CHECKED : 0), kMenuToggleTopMost, L"\u7a97\u53e3\u7f6e\u9876");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u7a0b\u5e8f\u8bbe\u7f6e");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -652,6 +676,11 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
             break;
         case kMenuFlipVertical:
             ToggleImageFlipVertical();
+            break;
+        case kMenuToggleTopMost:
+            if (!ToggleWindowTopMost()) {
+                MessageBoxW(hwnd_, L"\u8bbe\u7f6e\u7a97\u53e3\u7f6e\u9876\u5931\u8d25\u3002", L"Qmi", MB_ICONERROR | MB_OK);
+            }
             break;
         case kMenuSettings:
             OpenSettingsWindow();

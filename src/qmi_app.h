@@ -174,6 +174,9 @@ private:
     void OpenSettingsWindow();
     bool OpenCurrentImageInFolder();
     bool PrintCurrentImage();
+    bool IsWindowTopMost() const;
+    bool SetWindowTopMost(bool topmost);
+    bool ToggleWindowTopMost();
     bool CopyCurrentImageToClipboard();
     bool CopyCurrentFileToClipboard();
     bool CopyCurrentImagePathToClipboard();

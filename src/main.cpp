@@ -89,6 +89,7 @@ constexpr UINT kMenuRotateCounterclockwise = 1010;
 constexpr UINT kMenuFlipHorizontal = 1011;
 constexpr UINT kMenuFlipVertical = 1012;
 constexpr UINT kMenuPrintImage = 1013;
+constexpr UINT kMenuToggleTopMost = 1014;
 constexpr UINT_PTR kRenderTimerId = 1;
 constexpr UINT_PTR kStartupScanTimerId = 2;
 constexpr UINT_PTR kAnimationTimerId = 3;
@@ -1788,6 +1789,11 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                     return 0;
                 case kMenuFlipVertical:
                     ToggleImageFlipVertical();
+                    return 0;
+                case kMenuToggleTopMost:
+                    if (!ToggleWindowTopMost()) {
+                        MessageBoxW(hwnd_, L"\u8bbe\u7f6e\u7a97\u53e3\u7f6e\u9876\u5931\u8d25\u3002", L"Qmi", MB_ICONERROR | MB_OK);
+                    }
                     return 0;
                 case kMenuSettings:
                     OpenSettingsWindow();
