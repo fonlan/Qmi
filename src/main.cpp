@@ -1794,7 +1794,9 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
 
         case WM_KEYDOWN: {
             const bool ctrl_down = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
-            if (ctrl_down && wparam == 'C') {
+            if (ctrl_down && wparam == 'O') {
+                OpenFileDialog();
+            } else if (ctrl_down && wparam == 'C') {
                 if (IsRenderableImageType(current_image_.type)) {
                     CopyCurrentImageToClipboard();
                 }

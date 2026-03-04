@@ -773,7 +773,7 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     const bool can_print_image = can_copy_file;
     const bool can_transform_image = IsRenderableImageTypeForActions(current_image_.type);
     const bool is_top_most = IsWindowTopMost();
-    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00\u56fe\u7247");
+    AppendMenuW(menu, MF_STRING, kMenuOpenFile, L"\u6253\u5f00\u56fe\u7247\tCtrl+O");
     AppendMenuW(menu,
                 can_open_containing_folder ? MF_STRING : (MF_STRING | MF_GRAYED),
                 kMenuOpenContainingFolder,
