@@ -33,6 +33,155 @@ constexpr UINT_PTR kStartupScanTimerId = 2;
 bool IsRenderableImageTypeForActions(ImageType type) {
     return type == ImageType::Raster || type == ImageType::Svg;
 }
+
+bool TryShellPrintPreview(HWND owner, const std::wstring& file_path, const wchar_t* shell_class) {
+    if (file_path.empty()) {
+        return false;
+    }
+
+    SHELLEXECUTEINFOW execute_info{};
+    execute_info.cbSize = sizeof(execute_info);
+    execute_info.fMask = SEE_MASK_FLAG_NO_UI;
+    execute_info.hwnd = owner;
+    execute_info.lpVerb = L"print";
+    execute_info.lpFile = file_path.c_str();
+    execute_info.nShow = SW_SHOWNORMAL;
+    if (shell_class && *shell_class) {
+        execute_info.fMask |= SEE_MASK_CLASSNAME;
+        execute_info.lpClass = shell_class;
+    }
+
+    if (!ShellExecuteExW(&execute_info)) {
+        return false;
+    }
+    return reinterpret_cast<INT_PTR>(execute_info.hInstApp) > 32;
+}
+
+bool TryShellPrintPreviewWithFallbackClass(HWND owner, const std::wstring& file_path) {
+    if (TryShellPrintPreview(owner, file_path, nullptr)) {
+        return true;
+    }
+    return TryShellPrintPreview(owner, file_path, L"SystemFileAssociations\\image");
+}
+
+bool BuildTemporaryPrintPngPath(fs::path* out_path) {
+    if (!out_path) {
+        return false;
+    }
+    out_path->clear();
+
+    wchar_t temp_dir[MAX_PATH] = {};
+    const DWORD temp_dir_len = GetTempPathW(MAX_PATH, temp_dir);
+    if (temp_dir_len == 0 || temp_dir_len >= MAX_PATH) {
+        return false;
+    }
+
+    wchar_t temp_file[MAX_PATH] = {};
+    if (!GetTempFileNameW(temp_dir, L"qmi", 0, temp_file)) {
+        return false;
+    }
+
+    const std::wstring temp_file_w = temp_file;
+    fs::path png_path = fs::path(temp_file_w).replace_extension(L".png");
+    const std::wstring png_file_w = png_path.wstring();
+
+    DeleteFileW(png_file_w.c_str());
+    if (!MoveFileExW(temp_file_w.c_str(), png_file_w.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileW(temp_file_w.c_str());
+        return false;
+    }
+    *out_path = std::move(png_path);
+    return true;
+}
+
+bool SavePremultipliedBgraPixelsAsPng(IWICImagingFactory* wic_factory,
+                                      const fs::path& output_path,
+                                      UINT32 width,
+                                      UINT32 height,
+                                      const std::vector<std::uint8_t>& premultiplied_pixels) {
+    if (!wic_factory || output_path.empty() || width == 0 || height == 0) {
+        return false;
+    }
+
+    const size_t row_bytes = static_cast<size_t>(width) * 4u;
+    if (row_bytes / 4u != static_cast<size_t>(width)) {
+        return false;
+    }
+    if (row_bytes > std::numeric_limits<size_t>::max() / static_cast<size_t>(height)) {
+        return false;
+    }
+    const size_t pixel_bytes = row_bytes * static_cast<size_t>(height);
+    if (premultiplied_pixels.size() < pixel_bytes ||
+        row_bytes > static_cast<size_t>(std::numeric_limits<UINT>::max()) ||
+        pixel_bytes > static_cast<size_t>(std::numeric_limits<UINT>::max())) {
+        return false;
+    }
+
+    std::vector<std::uint8_t> png_pixels = premultiplied_pixels;
+    for (size_t i = 0; i + 3 < png_pixels.size(); i += 4) {
+        const std::uint8_t alpha = png_pixels[i + 3];
+        png_pixels[i + 0] = UnpremultiplyChannel(png_pixels[i + 0], alpha);
+        png_pixels[i + 1] = UnpremultiplyChannel(png_pixels[i + 1], alpha);
+        png_pixels[i + 2] = UnpremultiplyChannel(png_pixels[i + 2], alpha);
+    }
+
+    ComPtr<IWICStream> stream;
+    HRESULT hr = wic_factory->CreateStream(&stream);
+    if (FAILED(hr) || !stream) {
+        return false;
+    }
+
+    const std::wstring output_file = output_path.wstring();
+    hr = stream->InitializeFromFilename(output_file.c_str(), GENERIC_WRITE);
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    ComPtr<IWICBitmapEncoder> encoder;
+    hr = wic_factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (FAILED(hr) || !encoder) {
+        return false;
+    }
+    hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> frame_properties;
+    hr = encoder->CreateNewFrame(&frame, &frame_properties);
+    if (FAILED(hr) || !frame) {
+        return false;
+    }
+    hr = frame->Initialize(frame_properties.Get());
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = frame->SetSize(width, height);
+    if (FAILED(hr)) {
+        return false;
+    }
+
+    WICPixelFormatGUID pixel_format = GUID_WICPixelFormat32bppBGRA;
+    hr = frame->SetPixelFormat(&pixel_format);
+    if (FAILED(hr) || !IsEqualGUID(pixel_format, GUID_WICPixelFormat32bppBGRA)) {
+        return false;
+    }
+
+    hr = frame->WritePixels(height,
+                            static_cast<UINT>(row_bytes),
+                            static_cast<UINT>(pixel_bytes),
+                            const_cast<BYTE*>(png_pixels.data()));
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = frame->Commit();
+    if (FAILED(hr)) {
+        return false;
+    }
+    hr = encoder->Commit();
+    return SUCCEEDED(hr);
+}
 }  // namespace
 
 void QmiApp::OpenFileDialog() {
@@ -455,9 +604,42 @@ bool QmiApp::PrintCurrentImage() {
     if (file_path.empty()) {
         return false;
     }
+    if (TryShellPrintPreviewWithFallbackClass(hwnd_, file_path)) {
+        return true;
+    }
 
-    const HINSTANCE shell_result = ShellExecuteW(hwnd_, L"print", file_path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    return reinterpret_cast<INT_PTR>(shell_result) > 32;
+    if (!IsRenderableImageTypeForActions(current_image_.type) || !wic_factory_) {
+        return false;
+    }
+
+    UINT32 width = 0;
+    UINT32 height = 0;
+    std::vector<std::uint8_t> pixels;
+    if (FAILED(ExtractCurrentImagePixels(&width, &height, &pixels)) || width == 0 || height == 0) {
+        return false;
+    }
+
+    fs::path temporary_png_path;
+    if (!BuildTemporaryPrintPngPath(&temporary_png_path)) {
+        return false;
+    }
+
+    if (!SavePremultipliedBgraPixelsAsPng(wic_factory_.Get(), temporary_png_path, width, height, pixels)) {
+        const std::wstring temp_file = temporary_png_path.wstring();
+        if (!temp_file.empty()) {
+            DeleteFileW(temp_file.c_str());
+        }
+        return false;
+    }
+
+    const std::wstring temporary_png_file = temporary_png_path.wstring();
+    const bool printed = TryShellPrintPreviewWithFallbackClass(hwnd_, temporary_png_file);
+    if (printed) {
+        MoveFileExW(temporary_png_file.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+    } else {
+        DeleteFileW(temporary_png_file.c_str());
+    }
+    return printed;
 }
 
 bool QmiApp::IsWindowTopMost() const {
