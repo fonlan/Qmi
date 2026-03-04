@@ -1621,6 +1621,8 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                 MoveSelection(1);
             } else if (wparam == VK_LEFT) {
                 MoveSelection(-1);
+            } else if (wparam == VK_ESCAPE) {
+                PostMessageW(hwnd_, WM_CLOSE, 0, 0);
             } else if (wparam == VK_UP || wparam == VK_DOWN) {
                 RECT client_rect{};
                 if (GetClientRect(hwnd_, &client_rect)) {
