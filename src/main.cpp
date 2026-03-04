@@ -1570,7 +1570,29 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
 
         case WM_LBUTTONDBLCLK: {
             POINT pt = POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-            HandleImageDoubleClick(pt);
+
+            if (HitTestTitleButton(pt) != TitleButton::None || HitTestOpenButton(pt) ||
+                HitTestEdgeNavButton(pt) != EdgeNavButton::None) {
+                return 0;
+            }
+
+            const int thumb_index = HitTestThumbnail(pt);
+            if (thumb_index >= 0 && thumb_index < static_cast<int>(images_.size())) {
+                return 0;
+            }
+
+            bool point_over_visible_image = false;
+            if (d2d_context_) {
+                const D2D1_SIZE_F size = d2d_context_->GetSize();
+                const D2D1_RECT_F viewport = GetImageViewport(size.width, size.height);
+                point_over_visible_image = IsPointOverVisibleImage(pt, viewport);
+            }
+
+            if (point_over_visible_image) {
+                HandleImageDoubleClick(pt);
+            } else {
+                ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
+            }
             return 0;
         }
 
