@@ -566,19 +566,45 @@ HRESULT QmiApp::LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg
     }
 
     ComPtr<ID2D1SvgDocument> doc;
-    hr = d2d_context5_->CreateSvgDocument(stream.Get(), D2D1::SizeF(1024.0f, 1024.0f), &doc);
+    // Use a neutral bootstrap viewport first, then normalize to the SVG's own geometry.
+    hr = d2d_context5_->CreateSvgDocument(stream.Get(), D2D1::SizeF(1.0f, 1.0f), &doc);
     if (FAILED(hr)) {
         return hr;
     }
 
-    const D2D1_SIZE_F viewport = doc->GetViewportSize();
+    D2D1_SIZE_F viewport = doc->GetViewportSize();
     float width = viewport.width;
     float height = viewport.height;
+
+    ComPtr<ID2D1SvgElement> root;
+    D2D1_SVG_VIEWBOX viewbox{};
+    bool has_viewbox = false;
+    doc->GetRoot(&root);
+    if (root) {
+        if (SUCCEEDED(root->GetAttributeValue(
+                L"viewBox", D2D1_SVG_ATTRIBUTE_POD_TYPE_VIEWBOX, &viewbox, sizeof(viewbox))) &&
+            viewbox.width > 0.0f && viewbox.height > 0.0f) {
+            has_viewbox = true;
+        }
+    }
+
+    const bool viewport_invalid = width < 1.0e-3f || height < 1.0e-3f;
+    const bool viewport_is_bootstrap = std::fabs(width - 1.0f) < 1.0e-3f && std::fabs(height - 1.0f) < 1.0e-3f;
+    if (has_viewbox) {
+        const float viewport_ratio = width / std::max(1.0f, height);
+        const float viewbox_ratio = viewbox.width / std::max(1.0f, viewbox.height);
+        const bool aspect_mismatch = std::fabs(viewport_ratio - viewbox_ratio) > 0.01f;
+        if (viewport_invalid || viewport_is_bootstrap || aspect_mismatch) {
+            width = viewbox.width;
+            height = viewbox.height;
+        }
+    }
+
     if (width < 1.0f || height < 1.0f) {
         width = 1024.0f;
         height = 1024.0f;
-        doc->SetViewportSize(D2D1::SizeF(width, height));
     }
+    doc->SetViewportSize(D2D1::SizeF(width, height));
 
     if (out_width) {
         *out_width = width;
@@ -672,4 +698,3 @@ HRESULT QmiApp::LoadSvgThumbnailBitmap(const fs::path& path,
     *out_bitmap = bitmap.Detach();
     return S_OK;
 }
-
