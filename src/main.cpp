@@ -1764,6 +1764,13 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
 
         case WM_CONTEXTMENU: {
             POINT pt = POINT{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+            if (pt.x != -1 || pt.y != -1) {
+                POINT client_pt = pt;
+                ScreenToClient(hwnd_, &client_pt);
+                if (HitTestThumbnail(client_pt) >= 0) {
+                    return 0;
+                }
+            }
             if (pt.x == -1 && pt.y == -1) {
                 RECT rc{};
                 GetClientRect(hwnd_, &rc);
