@@ -51,6 +51,7 @@ configure_file("${CMAKE_SOURCE_DIR}/src/qmi_icon.rc.in" "${QMI_ICON_RC}" @ONLY)
 add_executable(Qmi WIN32
     src/main.cpp
     src/qmi_imaging.cpp
+    src/qmi_navigation.cpp
     src/qmi_settings.cpp
     src/qmi_utils.cpp
     "${QMI_ICON_RC}"
