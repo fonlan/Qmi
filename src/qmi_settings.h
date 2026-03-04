@@ -71,6 +71,10 @@ struct SettingsWindowState {
     HWND opacity_label = nullptr;
     HWND opacity_slider = nullptr;
     HWND opacity_value_label = nullptr;
+    HWND sort_field_label = nullptr;
+    HWND sort_field_combo = nullptr;
+    HWND sort_direction_label = nullptr;
+    HWND sort_direction_combo = nullptr;
 
     HWND associations_hint = nullptr;
     std::vector<HWND> association_checkboxes;

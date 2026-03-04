@@ -27,11 +27,16 @@ void QmiApp::BuildDirectoryList(const fs::path& selected_file) {
         target = selected_file;
     }
     const fs::path directory = target.parent_path();
-    const std::wstring target_name_key = ToLower(target.filename().wstring());
+    const std::wstring target_path_key = NormalizePathLower(target);
 
     struct DirectoryImageEntry {
         fs::path path;
-        std::wstring sort_key;
+        std::wstring path_key;
+        std::wstring name_key;
+        std::wstring extension_key;
+        ULONGLONG file_size = 0;
+        ULONGLONG creation_time = 0;
+        ULONGLONG modified_time = 0;
         bool is_target = false;
     };
 
@@ -54,18 +59,110 @@ void QmiApp::BuildDirectoryList(const fs::path& selected_file) {
             if (!IsSupportedExtension(entry_path)) {
                 continue;
             }
-            std::wstring name_key = ToLower(entry_path.filename().wstring());
-            found.push_back(DirectoryImageEntry{entry_path, std::move(name_key), false});
-            found.back().is_target = (found.back().sort_key == target_name_key);
+
+            WIN32_FILE_ATTRIBUTE_DATA file_data{};
+            ULONGLONG file_size = 0;
+            ULONGLONG creation_time = 0;
+            ULONGLONG modified_time = 0;
+            if (GetFileAttributesExW(entry_path.c_str(), GetFileExInfoStandard, &file_data)) {
+                file_size =
+                    (static_cast<ULONGLONG>(file_data.nFileSizeHigh) << 32u) | static_cast<ULONGLONG>(file_data.nFileSizeLow);
+                creation_time = (static_cast<ULONGLONG>(file_data.ftCreationTime.dwHighDateTime) << 32u) |
+                                static_cast<ULONGLONG>(file_data.ftCreationTime.dwLowDateTime);
+                modified_time = (static_cast<ULONGLONG>(file_data.ftLastWriteTime.dwHighDateTime) << 32u) |
+                                static_cast<ULONGLONG>(file_data.ftLastWriteTime.dwLowDateTime);
+            }
+
+            DirectoryImageEntry entry{};
+            entry.path = entry_path;
+            entry.path_key = NormalizePathLower(entry_path);
+            entry.name_key = ToLower(entry_path.filename().wstring());
+            entry.extension_key = ToLower(entry_path.extension().wstring());
+            entry.file_size = file_size;
+            entry.creation_time = creation_time;
+            entry.modified_time = modified_time;
+            entry.is_target = entry.path_key == target_path_key;
+            found.push_back(std::move(entry));
         }
     }
 
     if (found.empty()) {
-        found.push_back(DirectoryImageEntry{target, target_name_key, true});
+        DirectoryImageEntry entry{};
+        entry.path = target;
+        entry.path_key = target_path_key;
+        entry.name_key = ToLower(target.filename().wstring());
+        entry.extension_key = ToLower(target.extension().wstring());
+        entry.is_target = true;
+        found.push_back(std::move(entry));
     }
 
-    std::sort(found.begin(), found.end(), [](const DirectoryImageEntry& a, const DirectoryImageEntry& b) {
-        return a.sort_key < b.sort_key;
+    const int sort_field = ClampFilmStripSortField(film_strip_sort_field_);
+    const bool sort_descending = film_strip_sort_descending_;
+    std::sort(found.begin(), found.end(), [sort_field, sort_descending](const DirectoryImageEntry& a, const DirectoryImageEntry& b) {
+        auto compare_string = [](const std::wstring& lhs, const std::wstring& rhs) -> int {
+            if (lhs < rhs) {
+                return -1;
+            }
+            if (lhs > rhs) {
+                return 1;
+            }
+            return 0;
+        };
+        auto compare_u64 = [](ULONGLONG lhs, ULONGLONG rhs) -> int {
+            if (lhs < rhs) {
+                return -1;
+            }
+            if (lhs > rhs) {
+                return 1;
+            }
+            return 0;
+        };
+
+        int cmp = 0;
+        switch (sort_field) {
+            case kFilmStripSortFieldFileSize:
+                cmp = compare_u64(a.file_size, b.file_size);
+                break;
+            case kFilmStripSortFieldFileExtension:
+                cmp = compare_string(a.extension_key, b.extension_key);
+                break;
+            case kFilmStripSortFieldCreationTime:
+                cmp = compare_u64(a.creation_time, b.creation_time);
+                break;
+            case kFilmStripSortFieldModifiedTime:
+                cmp = compare_u64(a.modified_time, b.modified_time);
+                break;
+            case kFilmStripSortFieldFileName:
+            default:
+                cmp = compare_string(a.name_key, b.name_key);
+                break;
+        }
+
+        if (cmp == 0) {
+            cmp = compare_string(a.name_key, b.name_key);
+        }
+        if (cmp == 0) {
+            cmp = compare_string(a.extension_key, b.extension_key);
+        }
+        if (cmp == 0) {
+            cmp = compare_u64(a.file_size, b.file_size);
+        }
+        if (cmp == 0) {
+            cmp = compare_u64(a.creation_time, b.creation_time);
+        }
+        if (cmp == 0) {
+            cmp = compare_u64(a.modified_time, b.modified_time);
+        }
+        if (cmp == 0) {
+            cmp = compare_string(a.path_key, b.path_key);
+        }
+        if (cmp == 0) {
+            return false;
+        }
+        if (sort_descending) {
+            cmp = -cmp;
+        }
+        return cmp < 0;
     });
 
     images_.reserve(found.size());
@@ -306,4 +403,3 @@ void QmiApp::EnsureThumbnailLoaded(int index) {
     }
     thumb.bitmap = bitmap;
 }
-

@@ -56,5 +56,23 @@ std::optional<std::filesystem::path> FindFirstSupportedImageInDirectory(const st
 inline constexpr int kMinWindowOpacityPercent = 1;
 inline constexpr int kMaxWindowOpacityPercent = 100;
 
-bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling, int* out_window_opacity_percent);
-bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling, int window_opacity_percent);
+inline constexpr int kFilmStripSortFieldFileName = 0;
+inline constexpr int kFilmStripSortFieldFileSize = 1;
+inline constexpr int kFilmStripSortFieldFileExtension = 2;
+inline constexpr int kFilmStripSortFieldCreationTime = 3;
+inline constexpr int kFilmStripSortFieldModifiedTime = 4;
+inline constexpr int kMinFilmStripSortField = kFilmStripSortFieldFileName;
+inline constexpr int kMaxFilmStripSortField = kFilmStripSortFieldModifiedTime;
+
+int ClampFilmStripSortField(int field);
+
+bool LoadUserConfig(bool* out_fit_on_switch,
+                    bool* out_smooth_sampling,
+                    int* out_window_opacity_percent,
+                    int* out_film_strip_sort_field,
+                    bool* out_film_strip_sort_descending);
+bool SaveUserConfig(bool fit_on_switch,
+                    bool smooth_sampling,
+                    int window_opacity_percent,
+                    int film_strip_sort_field,
+                    bool film_strip_sort_descending);

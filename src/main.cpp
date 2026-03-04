@@ -98,6 +98,10 @@ constexpr int kCtrlSmoothSampling = 2002;
 constexpr int kCtrlWindowOpacitySlider = 2003;
 constexpr int kCtrlWindowOpacityLabel = 2004;
 constexpr int kCtrlWindowOpacityValue = 2005;
+constexpr int kCtrlFilmStripSortFieldLabel = 2006;
+constexpr int kCtrlFilmStripSortFieldCombo = 2007;
+constexpr int kCtrlFilmStripSortDirectionLabel = 2008;
+constexpr int kCtrlFilmStripSortDirectionCombo = 2009;
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -154,6 +158,30 @@ void UpdateWindowOpacityLabel(SettingsWindowState* state, int percent) {
     RedrawWindow(label_hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
 }
 
+int ClampFilmStripSortDirectionIndex(int index) {
+    return index <= 0 ? 0 : 1;
+}
+
+int ToFilmStripSortDirectionIndex(bool descending) {
+    return descending ? 1 : 0;
+}
+
+bool IsFilmStripSortControlId(int control_id) {
+    return control_id == kCtrlFilmStripSortFieldCombo || control_id == kCtrlFilmStripSortDirectionCombo;
+}
+
+void SyncFilmStripSortControls(SettingsWindowState* state, int sort_field, bool sort_descending) {
+    if (!state) {
+        return;
+    }
+    if (state->sort_field_combo) {
+        SendMessageW(state->sort_field_combo, CB_SETCURSEL, ClampFilmStripSortField(sort_field), 0);
+    }
+    if (state->sort_direction_combo) {
+        SendMessageW(state->sort_direction_combo, CB_SETCURSEL, ToFilmStripSortDirectionIndex(sort_descending), 0);
+    }
+}
+
 bool IsRenderableImageType(ImageType type) {
     return type == ImageType::Raster || type == ImageType::Svg;
 }
@@ -174,7 +202,12 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
         return false;
     }
 
-    LoadUserConfig(&fit_on_switch_, &smooth_sampling_, &window_opacity_percent_);
+    LoadUserConfig(&fit_on_switch_,
+                   &smooth_sampling_,
+                   &window_opacity_percent_,
+                   &film_strip_sort_field_,
+                   &film_strip_sort_descending_);
+    film_strip_sort_field_ = ClampFilmStripSortField(film_strip_sort_field_);
 
     if (!InitDeviceIndependentResources()) {
         return false;
@@ -1927,6 +1960,69 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                          reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowOpacityValue)),
                                                          nullptr,
                                                          nullptr);
+            state->sort_field_label = CreateWindowExW(
+                0,
+                L"STATIC",
+                L"\u80f6\u7247\u6392\u5e8f\u65b9\u5f0f",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlFilmStripSortFieldLabel)),
+                nullptr,
+                nullptr);
+            state->sort_field_combo = CreateWindowExW(
+                0,
+                WC_COMBOBOXW,
+                nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlFilmStripSortFieldCombo)),
+                nullptr,
+                nullptr);
+            state->sort_direction_label = CreateWindowExW(
+                0,
+                L"STATIC",
+                L"\u6392\u5e8f\u65b9\u5411",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlFilmStripSortDirectionLabel)),
+                nullptr,
+                nullptr);
+            state->sort_direction_combo = CreateWindowExW(
+                0,
+                WC_COMBOBOXW,
+                nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlFilmStripSortDirectionCombo)),
+                nullptr,
+                nullptr);
+            if (state->sort_field_combo) {
+                SendMessageW(state->sort_field_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6309\u6587\u4ef6\u540d"));
+                SendMessageW(state->sort_field_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6309\u6587\u4ef6\u5927\u5c0f"));
+                SendMessageW(state->sort_field_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6309\u6587\u4ef6\u540e\u7f00"));
+                SendMessageW(state->sort_field_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6309\u521b\u5efa\u65e5\u671f"));
+                SendMessageW(state->sort_field_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6309\u4fee\u6539\u65e5\u671f"));
+            }
+            if (state->sort_direction_combo) {
+                SendMessageW(state->sort_direction_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5347\u5e8f"));
+                SendMessageW(state->sort_direction_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u964d\u5e8f"));
+            }
             SendMessageW(state->fit_checkbox, BM_SETCHECK, app && app->fit_on_switch_ ? BST_CHECKED : BST_UNCHECKED, 0);
             SendMessageW(state->smooth_checkbox,
                          BM_SETCHECK,
@@ -1944,6 +2040,9 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                              app ? ClampWindowOpacityPercent(app->window_opacity_percent_) : kMaxWindowOpacityPercent);
             }
             UpdateWindowOpacityLabel(state, app ? app->window_opacity_percent_ : kMaxWindowOpacityPercent);
+            SyncFilmStripSortControls(state,
+                                      app ? app->film_strip_sort_field_ : kFilmStripSortFieldFileName,
+                                      app ? app->film_strip_sort_descending_ : false);
 
             state->associations_hint = CreateWindowExW(0,
                                                        L"STATIC",
@@ -2116,6 +2215,10 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             SetControlFont(state->smooth_checkbox, state->body_font);
             SetControlFont(state->opacity_label, state->body_font);
             SetControlFont(state->opacity_value_label, state->body_font);
+            SetControlFont(state->sort_field_label, state->body_font);
+            SetControlFont(state->sort_field_combo, state->body_font);
+            SetControlFont(state->sort_direction_label, state->body_font);
+            SetControlFont(state->sort_direction_combo, state->body_font);
             SetControlFont(state->associations_hint, state->body_font);
             for (HWND checkbox : state->association_checkboxes) {
                 SetControlFont(checkbox, state->body_font);
@@ -2195,6 +2298,40 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
                 return 0;
             }
+            if (app && HIWORD(wparam) == CBN_SELCHANGE && IsFilmStripSortControlId(LOWORD(wparam))) {
+                int new_sort_field = app->film_strip_sort_field_;
+                bool new_sort_descending = app->film_strip_sort_descending_;
+                if (state->sort_field_combo) {
+                    const LRESULT selected = SendMessageW(state->sort_field_combo, CB_GETCURSEL, 0, 0);
+                    if (selected != CB_ERR) {
+                        new_sort_field = ClampFilmStripSortField(static_cast<int>(selected));
+                    }
+                }
+                if (state->sort_direction_combo) {
+                    const LRESULT selected = SendMessageW(state->sort_direction_combo, CB_GETCURSEL, 0, 0);
+                    if (selected != CB_ERR) {
+                        new_sort_descending = ClampFilmStripSortDirectionIndex(static_cast<int>(selected)) != 0;
+                    }
+                }
+
+                const bool changed = new_sort_field != app->film_strip_sort_field_ ||
+                                     new_sort_descending != app->film_strip_sort_descending_;
+                if (changed) {
+                    app->film_strip_sort_field_ = new_sort_field;
+                    app->film_strip_sort_descending_ = new_sort_descending;
+                    SaveUserConfig(app->fit_on_switch_,
+                                   app->smooth_sampling_,
+                                   app->window_opacity_percent_,
+                                   app->film_strip_sort_field_,
+                                   app->film_strip_sort_descending_);
+                    if (!app->current_image_.path.empty()) {
+                        app->BuildDirectoryList(app->current_image_.path);
+                    }
+                    app->RequestRender();
+                }
+                SyncFilmStripSortControls(state, app->film_strip_sort_field_, app->film_strip_sort_descending_);
+                return 0;
+            }
             if (HIWORD(wparam) == STN_CLICKED && LOWORD(wparam) == kCtrlAboutRepoLink) {
                 const HINSTANCE shell_result =
                     ShellExecuteW(hwnd, L"open", kQmiRepositoryUrl, nullptr, nullptr, SW_SHOWNORMAL);
@@ -2243,7 +2380,11 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     should_save_user_config = true;
                 }
                 if (should_save_user_config) {
-                    SaveUserConfig(app->fit_on_switch_, app->smooth_sampling_, app->window_opacity_percent_);
+                    SaveUserConfig(app->fit_on_switch_,
+                                   app->smooth_sampling_,
+                                   app->window_opacity_percent_,
+                                   app->film_strip_sort_field_,
+                                   app->film_strip_sort_descending_);
                 }
                 InvalidateRect(app->hwnd_, nullptr, FALSE);
             }
@@ -2256,7 +2397,11 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 if (new_opacity_percent != app->window_opacity_percent_) {
                     app->window_opacity_percent_ = new_opacity_percent;
                     app->UpdateBackgroundOpacityBrushes();
-                    SaveUserConfig(app->fit_on_switch_, app->smooth_sampling_, app->window_opacity_percent_);
+                    SaveUserConfig(app->fit_on_switch_,
+                                   app->smooth_sampling_,
+                                   app->window_opacity_percent_,
+                                   app->film_strip_sort_field_,
+                                   app->film_strip_sort_descending_);
                     app->RequestRender();
                 }
                 return 0;
@@ -2318,6 +2463,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
 
                 const bool is_panel_ctrl = ctrl == state->fit_checkbox || ctrl == state->smooth_checkbox ||
                                            ctrl == state->opacity_label || ctrl == state->opacity_value_label ||
+                                           ctrl == state->sort_field_label || ctrl == state->sort_direction_label ||
                                            ctrl == state->associations_hint || ctrl == state->association_status ||
                                            ctrl == state->about_description || ctrl == state->about_author ||
                                            ctrl == state->about_repo_label || is_association_checkbox;

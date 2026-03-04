@@ -414,6 +414,10 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
     ShowWindow(state->opacity_label, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->opacity_slider, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->opacity_value_label, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->sort_field_label, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->sort_field_combo, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->sort_direction_label, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->sort_direction_combo, show_general ? SW_SHOW : SW_HIDE);
 
     ShowWindow(state->associations_hint, show_associations ? SW_SHOW : SW_HIDE);
     ShowWindow(state->association_select_all_button, show_associations ? SW_SHOW : SW_HIDE);
@@ -485,6 +489,14 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
                TRUE);
     MoveWindow(state->fit_checkbox, general_x, panel_y + 78, text_width, 28, TRUE);
     MoveWindow(state->smooth_checkbox, general_x, panel_y + 114, text_width, 28, TRUE);
+    const int sort_field_label_y = panel_y + 152;
+    const int sort_field_combo_y = sort_field_label_y + 24;
+    const int sort_direction_label_y = sort_field_combo_y + 36;
+    const int sort_direction_combo_y = sort_direction_label_y + 24;
+    MoveWindow(state->sort_field_label, general_x, sort_field_label_y, text_width, 22, TRUE);
+    MoveWindow(state->sort_field_combo, general_x, sort_field_combo_y, text_width, 220, TRUE);
+    MoveWindow(state->sort_direction_label, general_x, sort_direction_label_y, text_width, 22, TRUE);
+    MoveWindow(state->sort_direction_combo, general_x, sort_direction_combo_y, text_width, 120, TRUE);
 
     const int association_hint_y = panel_y + 8;
     MoveWindow(state->associations_hint, panel_x + kPanelPaddingX, association_hint_y, text_width, 44, TRUE);

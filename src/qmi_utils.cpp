@@ -19,6 +19,8 @@ constexpr int kAppIconResourceId = 101;
 constexpr char kConfigFitOnSwitchKey[] = "\"fit_on_switch\"";
 constexpr char kConfigSmoothSamplingKey[] = "\"smooth_sampling\"";
 constexpr char kConfigWindowOpacityPercentKey[] = "\"window_opacity_percent\"";
+constexpr char kConfigFilmStripSortFieldKey[] = "\"filmstrip_sort_field\"";
+constexpr char kConfigFilmStripSortDescendingKey[] = "\"filmstrip_sort_descending\"";
 constexpr char kConfigTrueLiteral[] = "true";
 constexpr char kConfigFalseLiteral[] = "false";
 constexpr wchar_t kConfigSubdirectory[] = L"Qmi";
@@ -193,6 +195,10 @@ std::wstring NormalizePathLower(const fs::path& p) {
         absolute = p;
     }
     return ToLower(absolute.lexically_normal().wstring());
+}
+
+int ClampFilmStripSortField(int field) {
+    return std::clamp(field, kMinFilmStripSortField, kMaxFilmStripSortField);
 }
 
 std::wstring FormatFileSizeText(ULONGLONG bytes) {
@@ -403,8 +409,13 @@ std::optional<fs::path> FindFirstSupportedImageInDirectory(const fs::path& direc
     return std::nullopt;
 }
 
-bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling, int* out_window_opacity_percent) {
-    if (!out_fit_on_switch || !out_smooth_sampling || !out_window_opacity_percent) {
+bool LoadUserConfig(bool* out_fit_on_switch,
+                    bool* out_smooth_sampling,
+                    int* out_window_opacity_percent,
+                    int* out_film_strip_sort_field,
+                    bool* out_film_strip_sort_descending) {
+    if (!out_fit_on_switch || !out_smooth_sampling || !out_window_opacity_percent || !out_film_strip_sort_field ||
+        !out_film_strip_sort_descending) {
         return false;
     }
 
@@ -445,16 +456,32 @@ bool LoadUserConfig(bool* out_fit_on_switch, bool* out_smooth_sampling, int* out
         *out_window_opacity_percent =
             std::clamp(parsed_opacity_percent, kMinWindowOpacityPercent, kMaxWindowOpacityPercent);
     }
+
+    int parsed_film_strip_sort_field = *out_film_strip_sort_field;
+    if (TryParseJsonInteger(json, kConfigFilmStripSortFieldKey, &parsed_film_strip_sort_field)) {
+        *out_film_strip_sort_field = ClampFilmStripSortField(parsed_film_strip_sort_field);
+    }
+
+    bool parsed_film_strip_sort_descending = *out_film_strip_sort_descending;
+    if (TryParseJsonBoolean(json, kConfigFilmStripSortDescendingKey, &parsed_film_strip_sort_descending)) {
+        *out_film_strip_sort_descending = parsed_film_strip_sort_descending;
+    }
+
     return true;
 }
 
-bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling, int window_opacity_percent) {
+bool SaveUserConfig(bool fit_on_switch,
+                    bool smooth_sampling,
+                    int window_opacity_percent,
+                    int film_strip_sort_field,
+                    bool film_strip_sort_descending) {
     const std::optional<fs::path> config_path = GetUserConfigPath(true);
     if (!config_path.has_value()) {
         return false;
     }
 
     const int clamped_opacity_percent = std::clamp(window_opacity_percent, kMinWindowOpacityPercent, kMaxWindowOpacityPercent);
+    const int clamped_film_strip_sort_field = ClampFilmStripSortField(film_strip_sort_field);
 
     fs::path temp_path = *config_path;
     temp_path += L".tmp";
@@ -469,7 +496,9 @@ bool SaveUserConfig(bool fit_on_switch, bool smooth_sampling, int window_opacity
         file << "  \"version\": 1,\n";
         file << "  \"fit_on_switch\": " << (fit_on_switch ? "true" : "false") << ",\n";
         file << "  \"smooth_sampling\": " << (smooth_sampling ? "true" : "false") << ",\n";
-        file << "  \"window_opacity_percent\": " << clamped_opacity_percent << "\n";
+        file << "  \"window_opacity_percent\": " << clamped_opacity_percent << ",\n";
+        file << "  \"filmstrip_sort_field\": " << clamped_film_strip_sort_field << ",\n";
+        file << "  \"filmstrip_sort_descending\": " << (film_strip_sort_descending ? "true" : "false") << "\n";
         file << "}\n";
 
         if (!file.good()) {
