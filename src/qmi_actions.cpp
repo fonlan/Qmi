@@ -778,11 +778,20 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
                 can_open_containing_folder ? MF_STRING : (MF_STRING | MF_GRAYED),
                 kMenuOpenContainingFolder,
                 L"\u6253\u5f00\u6240\u5728\u6587\u4ef6\u5939");
-    AppendMenuW(menu, can_print_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuPrintImage, L"\u6253\u5370\u56fe\u7247");
-    AppendMenuW(menu, can_copy_image ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImage, L"\u590d\u5236\u56fe\u7247");
+    AppendMenuW(menu,
+                can_print_image ? MF_STRING : (MF_STRING | MF_GRAYED),
+                kMenuPrintImage,
+                L"\u6253\u5370\u56fe\u7247\tCtrl+P");
+    AppendMenuW(menu,
+                can_copy_image ? MF_STRING : (MF_STRING | MF_GRAYED),
+                kMenuCopyImage,
+                L"\u590d\u5236\u56fe\u7247\tCtrl+C");
     AppendMenuW(menu, can_copy_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyFile, L"\u590d\u5236\u6587\u4ef6");
     AppendMenuW(menu, can_copy_path ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuCopyImagePath, L"\u590d\u5236\u56fe\u7247\u8def\u5f84");
-    AppendMenuW(menu, can_delete_file ? MF_STRING : (MF_STRING | MF_GRAYED), kMenuDeleteFile, L"\u5220\u9664\u6587\u4ef6");
+    AppendMenuW(menu,
+                can_delete_file ? MF_STRING : (MF_STRING | MF_GRAYED),
+                kMenuDeleteFile,
+                L"\u5220\u9664\u6587\u4ef6\tDelete");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu,
                 can_transform_image ? MF_STRING : (MF_STRING | MF_GRAYED),
@@ -805,7 +814,7 @@ void QmiApp::ShowContextMenu(POINT screen_pt) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"\u7a0b\u5e8f\u8bbe\u7f6e");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa\u7a0b\u5e8f");
+    AppendMenuW(menu, MF_STRING, kMenuExit, L"\u9000\u51fa\u7a0b\u5e8f\tEsc");
 
     SetForegroundWindow(hwnd_);
     const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen_pt.x, screen_pt.y, 0, hwnd_, nullptr);
