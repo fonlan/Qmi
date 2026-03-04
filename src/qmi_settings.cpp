@@ -304,9 +304,11 @@ void InitializeShortcutsTable(HWND table_hwnd) {
         const wchar_t* key = L"";
         const wchar_t* action = L"";
     };
-    constexpr std::array<ShortcutRow, 6> kRows = {{
-        {L"Left / Up", L"\u4e0a\u4e00\u5f20\u56fe\u7247"},
-        {L"Right / Down", L"\u4e0b\u4e00\u5f20\u56fe\u7247"},
+    constexpr std::array<ShortcutRow, 8> kRows = {{
+        {L"Left", L"\u4e0a\u4e00\u5f20\u56fe\u7247"},
+        {L"Right", L"\u4e0b\u4e00\u5f20\u56fe\u7247"},
+        {L"Up", L"\u653e\u5927\u89c6\u56fe"},
+        {L"Down", L"\u7f29\u5c0f\u89c6\u56fe"},
         {L"0", L"\u91cd\u7f6e\u7f29\u653e\u4e0e\u5e73\u79fb"},
         {L"Ctrl + C", L"\u590d\u5236\u5f53\u524d\u56fe\u7247"},
         {L"Ctrl + P", L"\u6253\u5370\u5f53\u524d\u56fe\u7247"},

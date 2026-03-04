@@ -1617,10 +1617,18 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
                                 L"Qmi",
                                 MB_ICONERROR | MB_OK);
                 }
-            } else if (wparam == VK_RIGHT || wparam == VK_DOWN) {
+            } else if (wparam == VK_RIGHT) {
                 MoveSelection(1);
-            } else if (wparam == VK_LEFT || wparam == VK_UP) {
+            } else if (wparam == VK_LEFT) {
                 MoveSelection(-1);
+            } else if (wparam == VK_UP || wparam == VK_DOWN) {
+                RECT client_rect{};
+                if (GetClientRect(hwnd_, &client_rect)) {
+                    POINT anchor_pt = POINT{(client_rect.left + client_rect.right) / 2,
+                                            (client_rect.top + client_rect.bottom) / 2};
+                    ClientToScreen(hwnd_, &anchor_pt);
+                    HandleMouseWheel((wparam == VK_UP) ? WHEEL_DELTA : -WHEEL_DELTA, anchor_pt);
+                }
             } else if (wparam == '0') {
                 ResetView();
                 RequestRender();
