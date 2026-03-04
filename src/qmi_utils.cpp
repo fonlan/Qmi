@@ -19,6 +19,7 @@ constexpr int kAppIconResourceId = 101;
 constexpr char kConfigFitOnSwitchKey[] = "\"fit_on_switch\"";
 constexpr char kConfigSmoothSamplingKey[] = "\"smooth_sampling\"";
 constexpr char kConfigWindowOpacityPercentKey[] = "\"window_opacity_percent\"";
+constexpr char kConfigWindowBackgroundColorRgbKey[] = "\"window_background_color_rgb\"";
 constexpr char kConfigFilmStripSortFieldKey[] = "\"filmstrip_sort_field\"";
 constexpr char kConfigFilmStripSortDescendingKey[] = "\"filmstrip_sort_descending\"";
 constexpr char kConfigTrueLiteral[] = "true";
@@ -199,6 +200,10 @@ std::wstring NormalizePathLower(const fs::path& p) {
 
 int ClampFilmStripSortField(int field) {
     return std::clamp(field, kMinFilmStripSortField, kMaxFilmStripSortField);
+}
+
+int ClampWindowBackgroundColorRgb(int rgb) {
+    return std::clamp(rgb, kMinWindowBackgroundColorRgb, kMaxWindowBackgroundColorRgb);
 }
 
 std::wstring FormatFileSizeText(ULONGLONG bytes) {
@@ -412,9 +417,11 @@ std::optional<fs::path> FindFirstSupportedImageInDirectory(const fs::path& direc
 bool LoadUserConfig(bool* out_fit_on_switch,
                     bool* out_smooth_sampling,
                     int* out_window_opacity_percent,
+                    int* out_window_background_color_rgb,
                     int* out_film_strip_sort_field,
                     bool* out_film_strip_sort_descending) {
-    if (!out_fit_on_switch || !out_smooth_sampling || !out_window_opacity_percent || !out_film_strip_sort_field ||
+    if (!out_fit_on_switch || !out_smooth_sampling || !out_window_opacity_percent || !out_window_background_color_rgb ||
+        !out_film_strip_sort_field ||
         !out_film_strip_sort_descending) {
         return false;
     }
@@ -457,6 +464,11 @@ bool LoadUserConfig(bool* out_fit_on_switch,
             std::clamp(parsed_opacity_percent, kMinWindowOpacityPercent, kMaxWindowOpacityPercent);
     }
 
+    int parsed_window_background_color_rgb = *out_window_background_color_rgb;
+    if (TryParseJsonInteger(json, kConfigWindowBackgroundColorRgbKey, &parsed_window_background_color_rgb)) {
+        *out_window_background_color_rgb = ClampWindowBackgroundColorRgb(parsed_window_background_color_rgb);
+    }
+
     int parsed_film_strip_sort_field = *out_film_strip_sort_field;
     if (TryParseJsonInteger(json, kConfigFilmStripSortFieldKey, &parsed_film_strip_sort_field)) {
         *out_film_strip_sort_field = ClampFilmStripSortField(parsed_film_strip_sort_field);
@@ -473,6 +485,7 @@ bool LoadUserConfig(bool* out_fit_on_switch,
 bool SaveUserConfig(bool fit_on_switch,
                     bool smooth_sampling,
                     int window_opacity_percent,
+                    int window_background_color_rgb,
                     int film_strip_sort_field,
                     bool film_strip_sort_descending) {
     const std::optional<fs::path> config_path = GetUserConfigPath(true);
@@ -481,6 +494,7 @@ bool SaveUserConfig(bool fit_on_switch,
     }
 
     const int clamped_opacity_percent = std::clamp(window_opacity_percent, kMinWindowOpacityPercent, kMaxWindowOpacityPercent);
+    const int clamped_background_color_rgb = ClampWindowBackgroundColorRgb(window_background_color_rgb);
     const int clamped_film_strip_sort_field = ClampFilmStripSortField(film_strip_sort_field);
 
     fs::path temp_path = *config_path;
@@ -497,6 +511,7 @@ bool SaveUserConfig(bool fit_on_switch,
         file << "  \"fit_on_switch\": " << (fit_on_switch ? "true" : "false") << ",\n";
         file << "  \"smooth_sampling\": " << (smooth_sampling ? "true" : "false") << ",\n";
         file << "  \"window_opacity_percent\": " << clamped_opacity_percent << ",\n";
+        file << "  \"window_background_color_rgb\": " << clamped_background_color_rgb << ",\n";
         file << "  \"filmstrip_sort_field\": " << clamped_film_strip_sort_field << ",\n";
         file << "  \"filmstrip_sort_descending\": " << (film_strip_sort_descending ? "true" : "false") << "\n";
         file << "}\n";

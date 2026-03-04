@@ -414,6 +414,9 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
     ShowWindow(state->opacity_label, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->opacity_slider, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->opacity_value_label, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->background_color_label, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->background_color_preview, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->background_color_button, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->sort_field_label, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->sort_field_combo, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->sort_direction_label, show_general ? SW_SHOW : SW_HIDE);
@@ -478,6 +481,13 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
     constexpr int kOpacityValueWidth = 56;
     constexpr int kOpacityValueGap = 8;
     const int opacity_slider_width = std::max(80, text_width - kOpacityValueWidth - kOpacityValueGap);
+    constexpr int kColorPreviewWidth = 48;
+    constexpr int kColorPreviewHeight = 24;
+    constexpr int kColorButtonWidth = 110;
+    constexpr int kColorGap = 10;
+    const int color_preview_y = panel_y + 102;
+    const int color_button_x = std::max(general_x, general_x + text_width - kColorButtonWidth);
+    const int color_preview_x = std::max(general_x, color_button_x - kColorGap - kColorPreviewWidth);
 
     MoveWindow(state->opacity_label, general_x, opacity_label_y, text_width, 22, TRUE);
     MoveWindow(state->opacity_slider, general_x, opacity_slider_y, opacity_slider_width, 30, TRUE);
@@ -487,9 +497,12 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
                kOpacityValueWidth,
                22,
                TRUE);
-    MoveWindow(state->fit_checkbox, general_x, panel_y + 78, text_width, 28, TRUE);
-    MoveWindow(state->smooth_checkbox, general_x, panel_y + 114, text_width, 28, TRUE);
-    const int sort_field_label_y = panel_y + 152;
+    MoveWindow(state->background_color_label, general_x, panel_y + 78, text_width, 22, TRUE);
+    MoveWindow(state->background_color_preview, color_preview_x, color_preview_y, kColorPreviewWidth, kColorPreviewHeight, TRUE);
+    MoveWindow(state->background_color_button, color_button_x, color_preview_y - 1, kColorButtonWidth, 26, TRUE);
+    MoveWindow(state->fit_checkbox, general_x, panel_y + 140, text_width, 28, TRUE);
+    MoveWindow(state->smooth_checkbox, general_x, panel_y + 176, text_width, 28, TRUE);
+    const int sort_field_label_y = panel_y + 214;
     const int sort_field_combo_y = sort_field_label_y + 24;
     const int sort_direction_label_y = sort_field_combo_y + 36;
     const int sort_direction_combo_y = sort_direction_label_y + 24;

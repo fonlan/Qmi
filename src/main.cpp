@@ -103,6 +103,9 @@ constexpr int kCtrlFilmStripSortFieldLabel = 2006;
 constexpr int kCtrlFilmStripSortFieldCombo = 2007;
 constexpr int kCtrlFilmStripSortDirectionLabel = 2008;
 constexpr int kCtrlFilmStripSortDirectionCombo = 2009;
+constexpr int kCtrlWindowBackgroundColorLabel = 2010;
+constexpr int kCtrlWindowBackgroundColorPreview = 2011;
+constexpr int kCtrlWindowBackgroundColorButton = 2012;
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -141,6 +144,85 @@ float GetBackgroundOpacityScale(int percent) {
 
 std::wstring FormatWindowOpacityPercentText(int percent) {
     return std::to_wstring(ClampWindowOpacityPercent(percent)) + L"%";
+}
+
+UINT32 ColorRefToRgbInt(COLORREF color) {
+    return (static_cast<UINT32>(GetRValue(color)) << 16) | (static_cast<UINT32>(GetGValue(color)) << 8) |
+           static_cast<UINT32>(GetBValue(color));
+}
+
+COLORREF RgbIntToColorRef(UINT32 rgb) {
+    return RGB((rgb >> 16) & 0xFFu, (rgb >> 8) & 0xFFu, rgb & 0xFFu);
+}
+
+UINT8 BlendChannel(UINT8 from, UINT8 to, float t) {
+    const float clamped_t = Clamp(t, 0.0f, 1.0f);
+    const float blended = static_cast<float>(from) + (static_cast<float>(to) - static_cast<float>(from)) * clamped_t;
+    return static_cast<UINT8>(Clamp(static_cast<int>(std::lround(blended)), 0, 255));
+}
+
+UINT32 BlendRgb(UINT32 from, UINT32 to, float t) {
+    const UINT8 from_r = static_cast<UINT8>((from >> 16) & 0xFFu);
+    const UINT8 from_g = static_cast<UINT8>((from >> 8) & 0xFFu);
+    const UINT8 from_b = static_cast<UINT8>(from & 0xFFu);
+    const UINT8 to_r = static_cast<UINT8>((to >> 16) & 0xFFu);
+    const UINT8 to_g = static_cast<UINT8>((to >> 8) & 0xFFu);
+    const UINT8 to_b = static_cast<UINT8>(to & 0xFFu);
+    return (static_cast<UINT32>(BlendChannel(from_r, to_r, t)) << 16) |
+           (static_cast<UINT32>(BlendChannel(from_g, to_g, t)) << 8) | static_cast<UINT32>(BlendChannel(from_b, to_b, t));
+}
+
+bool IsDarkRgb(UINT32 rgb) {
+    const float r = static_cast<float>((rgb >> 16) & 0xFFu);
+    const float g = static_cast<float>((rgb >> 8) & 0xFFu);
+    const float b = static_cast<float>(rgb & 0xFFu);
+    const float luminance = 0.299f * r + 0.587f * g + 0.114f * b;
+    return luminance < 150.0f;
+}
+
+bool ChooseSettingsBackgroundColor(HWND owner, COLORREF initial, COLORREF* out_color) {
+    if (!out_color) {
+        return false;
+    }
+
+    static COLORREF custom_colors[16] = {};
+    CHOOSECOLORW choose = {};
+    choose.lStructSize = sizeof(choose);
+    choose.hwndOwner = owner;
+    choose.lpCustColors = custom_colors;
+    choose.rgbResult = initial;
+    choose.Flags = CC_RGBINIT | CC_FULLOPEN;
+    if (!ChooseColorW(&choose)) {
+        return false;
+    }
+
+    *out_color = choose.rgbResult;
+    return true;
+}
+
+void UpdateBackgroundColorPreview(SettingsWindowState* state, int color_rgb) {
+    if (!state) {
+        return;
+    }
+
+    const COLORREF preview_color = RgbIntToColorRef(static_cast<UINT32>(ClampWindowBackgroundColorRgb(color_rgb)));
+    if (state->background_color_preview_brush) {
+        DeleteObject(state->background_color_preview_brush);
+        state->background_color_preview_brush = nullptr;
+    }
+    state->background_color_preview_brush = CreateSolidBrush(preview_color);
+
+    if (state->background_color_preview) {
+        InvalidateRect(state->background_color_preview, nullptr, TRUE);
+        HWND parent = GetParent(state->background_color_preview);
+        if (parent) {
+            RECT rc{};
+            if (GetWindowRect(state->background_color_preview, &rc)) {
+                MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&rc), 2);
+                RedrawWindow(parent, &rc, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+            }
+        }
+    }
 }
 
 void UpdateWindowOpacityLabel(SettingsWindowState* state, int percent) {
@@ -208,9 +290,11 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
     LoadUserConfig(&fit_on_switch_,
                    &smooth_sampling_,
                    &window_opacity_percent_,
+                   &window_background_color_rgb_,
                    &film_strip_sort_field_,
                    &film_strip_sort_descending_);
     film_strip_sort_field_ = ClampFilmStripSortField(film_strip_sort_field_);
+    window_background_color_rgb_ = ClampWindowBackgroundColorRgb(window_background_color_rgb_);
 
     if (!InitDeviceIndependentResources()) {
         return false;
@@ -588,23 +672,55 @@ void QmiApp::CreateBrushes() {
 }
 
 void QmiApp::UpdateBackgroundOpacityBrushes() {
+    const UINT32 base_rgb = static_cast<UINT32>(ClampWindowBackgroundColorRgb(window_background_color_rgb_));
+    window_background_color_rgb_ = static_cast<int>(base_rgb);
+    const bool dark_bg = IsDarkRgb(base_rgb);
+    const UINT32 panel_rgb = dark_bg ? BlendRgb(base_rgb, 0xFFFFFFu, 0.03f) : BlendRgb(base_rgb, 0x000000u, 0.08f);
+    const UINT32 overlay_rgb = dark_bg ? BlendRgb(base_rgb, 0x000000u, 0.06f) : BlendRgb(base_rgb, 0x000000u, 0.14f);
+    const UINT32 thumb_rgb = dark_bg ? BlendRgb(base_rgb, 0xFFFFFFu, 0.38f) : BlendRgb(base_rgb, 0x000000u, 0.35f);
+    const UINT32 text_rgb = dark_bg ? 0xF0F0F0u : 0x1E1E1Eu;
+    const UINT32 hover_rgb = dark_bg ? 0xFFFFFFu : 0x000000u;
+    const UINT32 open_fill_rgb = dark_bg ? 0x171717u : 0xF2F2F2u;
+    const UINT32 open_stroke_rgb = dark_bg ? 0x101010u : 0x404040u;
     const float opacity_scale = GetBackgroundOpacityScale(window_opacity_percent_);
+    if (brush_text_) {
+        brush_text_->SetColor(D2D1::ColorF(text_rgb, 0.97f));
+    }
     if (brush_panel_) {
+        brush_panel_->SetColor(D2D1::ColorF(panel_rgb, 1.0f));
         brush_panel_->SetOpacity(opacity_scale);
     }
     if (brush_overlay_) {
+        brush_overlay_->SetColor(D2D1::ColorF(overlay_rgb, 1.0f));
         brush_overlay_->SetOpacity(opacity_scale);
     }
     if (brush_hover_) {
+        brush_hover_->SetColor(D2D1::ColorF(hover_rgb, 1.0f));
         brush_hover_->SetOpacity(kHoverOverlayOpacity * opacity_scale);
     }
     if (brush_close_hover_) {
+        brush_close_hover_->SetColor(D2D1::ColorF(0xE81123, 1.0f));
         brush_close_hover_->SetOpacity(kCloseHoverOverlayOpacity * opacity_scale);
     }
+    if (brush_open_button_fill_) {
+        brush_open_button_fill_->SetColor(D2D1::ColorF(open_fill_rgb, kOpenButtonFillOpacity));
+    }
+    if (brush_open_button_hover_) {
+        brush_open_button_hover_->SetColor(D2D1::ColorF(hover_rgb, kOpenButtonHoverOpacity));
+    }
+    if (brush_open_button_stroke_) {
+        brush_open_button_stroke_->SetColor(D2D1::ColorF(open_stroke_rgb, kOpenButtonStrokeOpacity));
+    }
     if (brush_viewport_bg_) {
+        brush_viewport_bg_->SetColor(D2D1::ColorF(base_rgb, 1.0f));
         brush_viewport_bg_->SetOpacity(opacity_scale);
     }
+    if (brush_image_bg_) {
+        brush_image_bg_->SetColor(D2D1::ColorF(base_rgb, 1.0f));
+        brush_image_bg_->SetOpacity(opacity_scale);
+    }
     if (brush_thumb_bg_) {
+        brush_thumb_bg_->SetColor(D2D1::ColorF(thumb_rgb, 1.0f));
         brush_thumb_bg_->SetOpacity(opacity_scale);
     }
 }
@@ -1982,6 +2098,45 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                          reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowOpacityValue)),
                                                          nullptr,
                                                          nullptr);
+            state->background_color_label = CreateWindowExW(
+                0,
+                L"STATIC",
+                L"\u754c\u9762\u80cc\u666f\u8272",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowBackgroundColorLabel)),
+                nullptr,
+                nullptr);
+            state->background_color_preview = CreateWindowExW(
+                0,
+                L"STATIC",
+                nullptr,
+                WS_CHILD | WS_VISIBLE | WS_BORDER,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowBackgroundColorPreview)),
+                nullptr,
+                nullptr);
+            state->background_color_button = CreateWindowExW(
+                0,
+                L"BUTTON",
+                L"\u9009\u62e9\u989c\u8272",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowBackgroundColorButton)),
+                nullptr,
+                nullptr);
             state->sort_field_label = CreateWindowExW(
                 0,
                 L"STATIC",
@@ -2062,6 +2217,8 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                              app ? ClampWindowOpacityPercent(app->window_opacity_percent_) : kMaxWindowOpacityPercent);
             }
             UpdateWindowOpacityLabel(state, app ? app->window_opacity_percent_ : kMaxWindowOpacityPercent);
+            UpdateBackgroundColorPreview(state,
+                                         app ? app->window_background_color_rgb_ : kDefaultWindowBackgroundColorRgb);
             SyncFilmStripSortControls(state,
                                       app ? app->film_strip_sort_field_ : kFilmStripSortFieldFileName,
                                       app ? app->film_strip_sort_descending_ : false);
@@ -2237,6 +2394,8 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             SetControlFont(state->smooth_checkbox, state->body_font);
             SetControlFont(state->opacity_label, state->body_font);
             SetControlFont(state->opacity_value_label, state->body_font);
+            SetControlFont(state->background_color_label, state->body_font);
+            SetControlFont(state->background_color_button, state->body_font);
             SetControlFont(state->sort_field_label, state->body_font);
             SetControlFont(state->sort_field_combo, state->body_font);
             SetControlFont(state->sort_direction_label, state->body_font);
@@ -2344,6 +2503,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     SaveUserConfig(app->fit_on_switch_,
                                    app->smooth_sampling_,
                                    app->window_opacity_percent_,
+                                   app->window_background_color_rgb_,
                                    app->film_strip_sort_field_,
                                    app->film_strip_sort_descending_);
                     if (!app->current_image_.path.empty()) {
@@ -2400,11 +2560,25 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     app->smooth_sampling_ =
                         SendMessageW(reinterpret_cast<HWND>(lparam), BM_GETCHECK, 0, 0) == BST_CHECKED;
                     should_save_user_config = true;
+                } else if (LOWORD(wparam) == kCtrlWindowBackgroundColorButton) {
+                    COLORREF selected = RgbIntToColorRef(static_cast<UINT32>(app->window_background_color_rgb_));
+                    if (ChooseSettingsBackgroundColor(hwnd, selected, &selected)) {
+                        const int new_background_color_rgb =
+                            ClampWindowBackgroundColorRgb(static_cast<int>(ColorRefToRgbInt(selected)));
+                        if (new_background_color_rgb != app->window_background_color_rgb_) {
+                            app->window_background_color_rgb_ = new_background_color_rgb;
+                            app->UpdateBackgroundOpacityBrushes();
+                            UpdateBackgroundColorPreview(state, new_background_color_rgb);
+                            should_save_user_config = true;
+                            app->RequestRender();
+                        }
+                    }
                 }
                 if (should_save_user_config) {
                     SaveUserConfig(app->fit_on_switch_,
                                    app->smooth_sampling_,
                                    app->window_opacity_percent_,
+                                   app->window_background_color_rgb_,
                                    app->film_strip_sort_field_,
                                    app->film_strip_sort_descending_);
                 }
@@ -2422,6 +2596,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     SaveUserConfig(app->fit_on_switch_,
                                    app->smooth_sampling_,
                                    app->window_opacity_percent_,
+                                   app->window_background_color_rgb_,
                                    app->film_strip_sort_field_,
                                    app->film_strip_sort_descending_);
                     app->RequestRender();
@@ -2451,8 +2626,14 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     SetBkMode(hdc, TRANSPARENT);
                     return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
                 }
+                if (ctrl == state->background_color_preview) {
+                    SetBkMode(hdc, OPAQUE);
+                    return reinterpret_cast<INT_PTR>(state->background_color_preview_brush
+                                                         ? state->background_color_preview_brush
+                                                         : GetSysColorBrush(COLOR_WINDOW));
+                }
                 if (ctrl == state->association_select_all_button || ctrl == state->association_clear_all_button ||
-                    ctrl == state->association_apply_button) {
+                    ctrl == state->association_apply_button || ctrl == state->background_color_button) {
                     break;
                 }
                 bool is_association_checkbox = false;
@@ -2485,6 +2666,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
 
                 const bool is_panel_ctrl = ctrl == state->fit_checkbox || ctrl == state->smooth_checkbox ||
                                            ctrl == state->opacity_label || ctrl == state->opacity_value_label ||
+                                           ctrl == state->background_color_label ||
                                            ctrl == state->sort_field_label || ctrl == state->sort_direction_label ||
                                            ctrl == state->associations_hint || ctrl == state->association_status ||
                                            ctrl == state->about_description || ctrl == state->about_author ||
@@ -2521,6 +2703,9 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
                 if (state->about_link_font) {
                     DeleteObject(state->about_link_font);
+                }
+                if (state->background_color_preview_brush) {
+                    DeleteObject(state->background_color_preview_brush);
                 }
                 if (state->about_icon_border_brush) {
                     DeleteObject(state->about_icon_border_brush);

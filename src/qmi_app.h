@@ -270,6 +270,7 @@ private:
     bool fit_on_switch_ = true;
     bool smooth_sampling_ = true;
     int window_opacity_percent_ = 100;
+    int window_background_color_rgb_ = 0x111111;
     int film_strip_sort_field_ = 0;
     bool film_strip_sort_descending_ = false;
     int film_strip_height_ = 120;
