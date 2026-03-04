@@ -121,6 +121,31 @@ bool RegistryStringEquals(const std::wstring& a, const std::wstring& b) {
     return ToLower(a) == ToLower(b);
 }
 
+int MeasureTextWidthForControl(HWND control, const wchar_t* text) {
+    if (!control || !text || *text == L'\0') {
+        return 0;
+    }
+    HDC dc = GetDC(control);
+    if (!dc) {
+        return 0;
+    }
+    HFONT font = reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0));
+    HGDIOBJ old_font = nullptr;
+    if (font) {
+        old_font = SelectObject(dc, font);
+    }
+    SIZE text_size{};
+    const int text_len = lstrlenW(text);
+    if (!GetTextExtentPoint32W(dc, text, text_len, &text_size)) {
+        text_size.cx = 0;
+    }
+    if (old_font) {
+        SelectObject(dc, old_font);
+    }
+    ReleaseDC(control, dc);
+    return text_size.cx;
+}
+
 bool IsExtensionAssociatedToQmi(const std::wstring& extension) {
     const std::wstring key_path = L"Software\\Classes\\" + extension;
     const std::optional<std::wstring> current_prog_id = ReadRegistryString(HKEY_CURRENT_USER, key_path, nullptr);
@@ -397,6 +422,7 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
     }
 
     ShowWindow(state->shortcuts_table, show_shortcuts ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->about_icon_border, show_about ? SW_SHOW : SW_HIDE);
     ShowWindow(state->about_icon, show_about ? SW_SHOW : SW_HIDE);
     ShowWindow(state->about_title, show_about ? SW_SHOW : SW_HIDE);
     ShowWindow(state->about_description, show_about ? SW_SHOW : SW_HIDE);
@@ -493,12 +519,21 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
     const int about_x = panel_x + kPanelPaddingX;
     const int about_y = panel_y + 16;
     constexpr int kAboutIconSize = 64;
+    const int about_icon_frame_size = kAboutIconSize + (kAboutIconBorderThickness * 2);
     constexpr int kAboutIconTitleGap = 14;
-    const int about_title_x = about_x + kAboutIconSize + kAboutIconTitleGap;
-    const int about_title_width = std::max(80, text_width - kAboutIconSize - kAboutIconTitleGap);
+    constexpr int kAboutTitleHeight = 52;
+    const int about_title_x = about_x + about_icon_frame_size + kAboutIconTitleGap;
+    const int about_title_width = std::max(80, text_width - about_icon_frame_size - kAboutIconTitleGap);
+    const int about_title_y = about_y + std::max(0, (about_icon_frame_size - kAboutTitleHeight) / 2);
 
-    MoveWindow(state->about_icon, about_x, about_y, kAboutIconSize, kAboutIconSize, TRUE);
-    MoveWindow(state->about_title, about_title_x, about_y + 6, about_title_width, 30, TRUE);
+    MoveWindow(state->about_icon_border, about_x, about_y, about_icon_frame_size, about_icon_frame_size, TRUE);
+    MoveWindow(state->about_icon,
+               about_x + kAboutIconBorderThickness,
+               about_y + kAboutIconBorderThickness,
+               kAboutIconSize,
+               kAboutIconSize,
+               TRUE);
+    MoveWindow(state->about_title, about_title_x, about_title_y, about_title_width, kAboutTitleHeight, TRUE);
 
     const int about_desc_y = about_y + kAboutIconSize + 16;
     MoveWindow(state->about_description, about_x, about_desc_y, text_width, 48, TRUE);
@@ -507,12 +542,17 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
     MoveWindow(state->about_author, about_x, about_author_y, text_width, 26, TRUE);
 
     const int about_repo_y = about_author_y + 34;
-    constexpr int kAboutRepoLabelWidth = 84;
-    MoveWindow(state->about_repo_label, about_x, about_repo_y, kAboutRepoLabelWidth, 26, TRUE);
+    const int about_repo_label_text_width =
+        MeasureTextWidthForControl(state->about_repo_label, L"\u4ed3\u5e93\uff1a");
+    const int about_repo_label_width = std::clamp(about_repo_label_text_width + 10, 46, 96);
+    const int repo_link_char_width = std::max(1, MeasureTextWidthForControl(state->about_repo_link, L"0"));
+    const int repo_link_left_shift = std::clamp(repo_link_char_width, 6, 16);
+    const int about_repo_link_offset = std::max(0, about_repo_label_width - repo_link_left_shift);
+    MoveWindow(state->about_repo_label, about_x, about_repo_y, about_repo_label_width, 26, TRUE);
     MoveWindow(state->about_repo_link,
-               about_x + kAboutRepoLabelWidth,
+               about_x + about_repo_link_offset,
                about_repo_y,
-               std::max(60, text_width - kAboutRepoLabelWidth),
+               std::max(60, text_width - about_repo_link_offset),
                26,
                TRUE);
     MoveWindow(

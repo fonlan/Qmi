@@ -1798,6 +1798,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             state->about_link_font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, TRUE, FALSE, DEFAULT_CHARSET,
                                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                                  DEFAULT_PITCH, L"Segoe UI");
+            state->about_icon_border_brush = CreateSolidBrush(RGB(198, 203, 211));
 
             state->nav_list = CreateWindowExW(0,
                                               L"LISTBOX",
@@ -1999,6 +2000,8 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                         nullptr);
             SyncAssociationSelections(state);
 
+            state->about_icon_border =
+                CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
             state->about_icon = CreateWindowExW(
                 0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE | SS_ICON | SS_CENTERIMAGE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
             state->about_title =
@@ -2031,7 +2034,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             state->about_repo_label = CreateWindowExW(0,
                                                       L"STATIC",
                                                       L"\u4ed3\u5e93\uff1a",
-                                                      WS_CHILD | WS_VISIBLE,
+                                                      WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP,
                                                       0,
                                                       0,
                                                       0,
@@ -2266,6 +2269,15 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     SetBkMode(hdc, TRANSPARENT);
                     return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
                 }
+                if (ctrl == state->about_icon_border) {
+                    SetBkMode(hdc, OPAQUE);
+                    return reinterpret_cast<INT_PTR>(state->about_icon_border_brush ? state->about_icon_border_brush
+                                                                                     : GetSysColorBrush(COLOR_3DLIGHT));
+                }
+                if (ctrl == state->about_icon) {
+                    SetBkMode(hdc, TRANSPARENT);
+                    return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+                }
                 if (ctrl == state->about_title) {
                     SetTextColor(hdc, RGB(25, 33, 52));
                     SetBkMode(hdc, TRANSPARENT);
@@ -2309,6 +2321,9 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
                 if (state->about_link_font) {
                     DeleteObject(state->about_link_font);
+                }
+                if (state->about_icon_border_brush) {
+                    DeleteObject(state->about_icon_border_brush);
                 }
                 delete state;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);

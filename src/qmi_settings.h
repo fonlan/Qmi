@@ -26,6 +26,8 @@ inline constexpr int kCtrlAssociationCheckboxBase = 2300;
 inline constexpr int kCtrlShortcutsTable = 2400;
 inline constexpr int kCtrlAboutRepoLink = 2500;
 
+inline constexpr int kAboutIconBorderThickness = 2;
+
 inline constexpr int kSettingsWindowWidth = 700;
 inline constexpr int kSettingsWindowHeight = 460;
 
@@ -78,6 +80,7 @@ struct SettingsWindowState {
     HWND association_status = nullptr;
 
     HWND shortcuts_table = nullptr;
+    HWND about_icon_border = nullptr;
     HWND about_icon = nullptr;
     HWND about_title = nullptr;
     HWND about_description = nullptr;
@@ -89,6 +92,7 @@ struct SettingsWindowState {
     HFONT body_font = nullptr;
     HFONT about_title_font = nullptr;
     HFONT about_link_font = nullptr;
+    HBRUSH about_icon_border_brush = nullptr;
 };
 
 int AssociationCheckboxControlId(size_t index);
