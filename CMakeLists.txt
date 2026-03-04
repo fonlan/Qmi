@@ -55,6 +55,7 @@ add_executable(Qmi WIN32
     src/qmi_navigation.cpp
     src/qmi_settings.cpp
     src/qmi_utils.cpp
+    src/qmi_view.cpp
     "${QMI_ICON_RC}"
 )
 
