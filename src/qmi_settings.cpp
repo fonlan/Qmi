@@ -418,6 +418,8 @@ void SetActiveSettingsPage(SettingsWindowState* state, int page_index) {
     ShowWindow(state->background_color_label, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->background_color_preview, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->background_color_button, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->startup_monitor_label, show_general ? SW_SHOW : SW_HIDE);
+    ShowWindow(state->startup_monitor_combo, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->sort_field_label, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->sort_field_combo, show_general ? SW_SHOW : SW_HIDE);
     ShowWindow(state->sort_direction_label, show_general ? SW_SHOW : SW_HIDE);
@@ -506,7 +508,11 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
     MoveWindow(state->background_color_button, color_button_x, color_preview_y - 1, kColorButtonWidth, 26, TRUE);
     MoveWindow(state->fit_checkbox, general_x, panel_y + 140, text_width, 28, TRUE);
     MoveWindow(state->smooth_checkbox, general_x, panel_y + 176, text_width, 28, TRUE);
-    const int sort_field_label_y = panel_y + 214;
+    const int startup_monitor_label_y = panel_y + 214;
+    const int startup_monitor_combo_y = startup_monitor_label_y + 24;
+    MoveWindow(state->startup_monitor_label, general_x, startup_monitor_label_y, text_width, 22, TRUE);
+    MoveWindow(state->startup_monitor_combo, general_x, startup_monitor_combo_y, text_width, 120, TRUE);
+    const int sort_field_label_y = startup_monitor_combo_y + 38;
     const int sort_field_combo_y = sort_field_label_y + 24;
     const int sort_direction_label_y = sort_field_combo_y + 36;
     const int sort_direction_combo_y = sort_direction_label_y + 24;

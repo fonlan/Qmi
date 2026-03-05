@@ -74,6 +74,8 @@ struct SettingsWindowState {
     HWND background_color_label = nullptr;
     HWND background_color_preview = nullptr;
     HWND background_color_button = nullptr;
+    HWND startup_monitor_label = nullptr;
+    HWND startup_monitor_combo = nullptr;
     HWND sort_field_label = nullptr;
     HWND sort_field_combo = nullptr;
     HWND sort_direction_label = nullptr;

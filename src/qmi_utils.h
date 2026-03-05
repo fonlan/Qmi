@@ -67,17 +67,25 @@ inline constexpr int kFilmStripSortFieldModifiedTime = 4;
 inline constexpr int kMinFilmStripSortField = kFilmStripSortFieldFileName;
 inline constexpr int kMaxFilmStripSortField = kFilmStripSortFieldModifiedTime;
 
+inline constexpr int kStartupMonitorModePrimary = 0;
+inline constexpr int kStartupMonitorModeMouse = 1;
+inline constexpr int kMinStartupMonitorMode = kStartupMonitorModePrimary;
+inline constexpr int kMaxStartupMonitorMode = kStartupMonitorModeMouse;
+
 int ClampFilmStripSortField(int field);
 int ClampWindowBackgroundColorRgb(int rgb);
+int ClampStartupMonitorMode(int mode);
 
 bool LoadUserConfig(bool* out_fit_on_switch,
                     bool* out_smooth_sampling,
+                    int* out_startup_monitor_mode,
                     int* out_window_opacity_percent,
                     int* out_window_background_color_rgb,
                     int* out_film_strip_sort_field,
                     bool* out_film_strip_sort_descending);
 bool SaveUserConfig(bool fit_on_switch,
                     bool smooth_sampling,
+                    int startup_monitor_mode,
                     int window_opacity_percent,
                     int window_background_color_rgb,
                     int film_strip_sort_field,

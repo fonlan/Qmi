@@ -106,6 +106,8 @@ constexpr int kCtrlFilmStripSortDirectionCombo = 2009;
 constexpr int kCtrlWindowBackgroundColorLabel = 2010;
 constexpr int kCtrlWindowBackgroundColorPreview = 2011;
 constexpr int kCtrlWindowBackgroundColorButton = 2012;
+constexpr int kCtrlStartupMonitorLabel = 2013;
+constexpr int kCtrlStartupMonitorCombo = 2014;
 
 constexpr int kMinWindowWidth = 640;
 constexpr int kMinWindowHeight = 420;
@@ -251,8 +253,19 @@ int ToFilmStripSortDirectionIndex(bool descending) {
     return descending ? 1 : 0;
 }
 
+int ToStartupMonitorComboIndex(int startup_monitor_mode) {
+    return ClampStartupMonitorMode(startup_monitor_mode);
+}
+
 bool IsFilmStripSortControlId(int control_id) {
     return control_id == kCtrlFilmStripSortFieldCombo || control_id == kCtrlFilmStripSortDirectionCombo;
+}
+
+void SyncStartupMonitorControl(SettingsWindowState* state, int startup_monitor_mode) {
+    if (!state || !state->startup_monitor_combo) {
+        return;
+    }
+    SendMessageW(state->startup_monitor_combo, CB_SETCURSEL, ToStartupMonitorComboIndex(startup_monitor_mode), 0);
 }
 
 void SyncFilmStripSortControls(SettingsWindowState* state, int sort_field, bool sort_descending) {
@@ -269,6 +282,35 @@ void SyncFilmStripSortControls(SettingsWindowState* state, int sort_field, bool 
 
 bool IsRenderableImageType(ImageType type) {
     return type == ImageType::Raster || type == ImageType::Svg;
+}
+
+RECT GetMonitorWorkArea(HMONITOR monitor) {
+    RECT fallback = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    if (!monitor) {
+        return fallback;
+    }
+
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(monitor, &mi)) {
+        return fallback;
+    }
+    return mi.rcWork;
+}
+
+RECT GetStartupMonitorWorkArea(int startup_monitor_mode) {
+    HMONITOR monitor = nullptr;
+    if (ClampStartupMonitorMode(startup_monitor_mode) == kStartupMonitorModeMouse) {
+        POINT cursor_pos{};
+        if (GetCursorPos(&cursor_pos)) {
+            monitor = MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST);
+        }
+    }
+    if (!monitor) {
+        POINT primary_point = {0, 0};
+        monitor = MonitorFromPoint(primary_point, MONITOR_DEFAULTTOPRIMARY);
+    }
+    return GetMonitorWorkArea(monitor);
 }
 }  // namespace
 
@@ -289,10 +331,12 @@ bool QmiApp::Initialize(HINSTANCE hinstance, int show_cmd, const std::optional<s
 
     LoadUserConfig(&fit_on_switch_,
                    &smooth_sampling_,
+                   &startup_monitor_mode_,
                    &window_opacity_percent_,
                    &window_background_color_rgb_,
                    &film_strip_sort_field_,
                    &film_strip_sort_descending_);
+    startup_monitor_mode_ = ClampStartupMonitorMode(startup_monitor_mode_);
     film_strip_sort_field_ = ClampFilmStripSortField(film_strip_sort_field_);
     window_background_color_rgb_ = ClampWindowBackgroundColorRgb(window_background_color_rgb_);
 
@@ -430,14 +474,22 @@ bool QmiApp::RegisterWindowClasses() {
 bool QmiApp::CreateMainWindow() {
     const DWORD style = WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
     const DWORD ex_style = WS_EX_APPWINDOW | WS_EX_LAYERED;
+    constexpr int kInitialWindowWidth = 1280;
+    constexpr int kInitialWindowHeight = 840;
+    const RECT work_area = GetStartupMonitorWorkArea(startup_monitor_mode_);
+    const int work_width = work_area.right - work_area.left;
+    const int work_height = work_area.bottom - work_area.top;
+    const int startup_x = work_area.left + std::max(0, (work_width - kInitialWindowWidth) / 2);
+    const int startup_y = work_area.top + std::max(0, (work_height - kInitialWindowHeight) / 2);
+
     hwnd_ = CreateWindowExW(ex_style,
                             kMainClassName,
                             L"Qmi",
                             style,
-                            CW_USEDEFAULT,
-                            CW_USEDEFAULT,
-                            1280,
-                            840,
+                            startup_x,
+                            startup_y,
+                            kInitialWindowWidth,
+                            kInitialWindowHeight,
                             nullptr,
                             nullptr,
                             hinstance_,
@@ -2146,6 +2198,32 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlWindowBackgroundColorButton)),
                 nullptr,
                 nullptr);
+            state->startup_monitor_label = CreateWindowExW(
+                0,
+                L"STATIC",
+                L"\u7a0b\u5e8f\u542f\u52a8\u5c4f\u5e55",
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlStartupMonitorLabel)),
+                nullptr,
+                nullptr);
+            state->startup_monitor_combo = CreateWindowExW(
+                0,
+                WC_COMBOBOXW,
+                nullptr,
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kCtrlStartupMonitorCombo)),
+                nullptr,
+                nullptr);
             state->sort_field_label = CreateWindowExW(
                 0,
                 L"STATIC",
@@ -2209,6 +2287,10 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 SendMessageW(state->sort_direction_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5347\u5e8f"));
                 SendMessageW(state->sort_direction_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u964d\u5e8f"));
             }
+            if (state->startup_monitor_combo) {
+                SendMessageW(state->startup_monitor_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u4e3b\u5c4f\u5e55"));
+                SendMessageW(state->startup_monitor_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u9f20\u6807\u6240\u5728\u5c4f\u5e55"));
+            }
             SendMessageW(state->fit_checkbox, BM_SETCHECK, app && app->fit_on_switch_ ? BST_CHECKED : BST_UNCHECKED, 0);
             SendMessageW(state->smooth_checkbox,
                          BM_SETCHECK,
@@ -2228,6 +2310,8 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             UpdateWindowOpacityLabel(state, app ? app->window_opacity_percent_ : kMaxWindowOpacityPercent);
             UpdateBackgroundColorPreview(state,
                                          app ? app->window_background_color_rgb_ : kDefaultWindowBackgroundColorRgb);
+            SyncStartupMonitorControl(state,
+                                      app ? app->startup_monitor_mode_ : kStartupMonitorModePrimary);
             SyncFilmStripSortControls(state,
                                       app ? app->film_strip_sort_field_ : kFilmStripSortFieldFileName,
                                       app ? app->film_strip_sort_descending_ : false);
@@ -2405,6 +2489,8 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             SetControlFont(state->opacity_value_label, state->body_font);
             SetControlFont(state->background_color_label, state->body_font);
             SetControlFont(state->background_color_button, state->body_font);
+            SetControlFont(state->startup_monitor_label, state->body_font);
+            SetControlFont(state->startup_monitor_combo, state->body_font);
             SetControlFont(state->sort_field_label, state->body_font);
             SetControlFont(state->sort_field_combo, state->body_font);
             SetControlFont(state->sort_direction_label, state->body_font);
@@ -2488,6 +2574,27 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
                 return 0;
             }
+            if (app && HIWORD(wparam) == CBN_SELCHANGE && LOWORD(wparam) == kCtrlStartupMonitorCombo) {
+                int new_startup_monitor_mode = app->startup_monitor_mode_;
+                if (state->startup_monitor_combo) {
+                    const LRESULT selected = SendMessageW(state->startup_monitor_combo, CB_GETCURSEL, 0, 0);
+                    if (selected != CB_ERR) {
+                        new_startup_monitor_mode = ClampStartupMonitorMode(static_cast<int>(selected));
+                    }
+                }
+                if (new_startup_monitor_mode != app->startup_monitor_mode_) {
+                    app->startup_monitor_mode_ = new_startup_monitor_mode;
+                    SaveUserConfig(app->fit_on_switch_,
+                                   app->smooth_sampling_,
+                                   app->startup_monitor_mode_,
+                                   app->window_opacity_percent_,
+                                   app->window_background_color_rgb_,
+                                   app->film_strip_sort_field_,
+                                   app->film_strip_sort_descending_);
+                }
+                SyncStartupMonitorControl(state, app->startup_monitor_mode_);
+                return 0;
+            }
             if (app && HIWORD(wparam) == CBN_SELCHANGE && IsFilmStripSortControlId(LOWORD(wparam))) {
                 int new_sort_field = app->film_strip_sort_field_;
                 bool new_sort_descending = app->film_strip_sort_descending_;
@@ -2511,6 +2618,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     app->film_strip_sort_descending_ = new_sort_descending;
                     SaveUserConfig(app->fit_on_switch_,
                                    app->smooth_sampling_,
+                                   app->startup_monitor_mode_,
                                    app->window_opacity_percent_,
                                    app->window_background_color_rgb_,
                                    app->film_strip_sort_field_,
@@ -2586,6 +2694,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 if (should_save_user_config) {
                     SaveUserConfig(app->fit_on_switch_,
                                    app->smooth_sampling_,
+                                   app->startup_monitor_mode_,
                                    app->window_opacity_percent_,
                                    app->window_background_color_rgb_,
                                    app->film_strip_sort_field_,
@@ -2604,6 +2713,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                     app->UpdateBackgroundOpacityBrushes();
                     SaveUserConfig(app->fit_on_switch_,
                                    app->smooth_sampling_,
+                                   app->startup_monitor_mode_,
                                    app->window_opacity_percent_,
                                    app->window_background_color_rgb_,
                                    app->film_strip_sort_field_,

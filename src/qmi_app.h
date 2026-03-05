@@ -269,6 +269,7 @@ private:
 
     bool fit_on_switch_ = true;
     bool smooth_sampling_ = true;
+    int startup_monitor_mode_ = 0;
     int window_opacity_percent_ = 100;
     int window_background_color_rgb_ = 0x111111;
     int film_strip_sort_field_ = 0;
