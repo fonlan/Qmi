@@ -31,6 +31,7 @@ inline constexpr int kAboutIconBorderThickness = 2;
 inline constexpr int kSettingsWindowWidth = 700;
 inline constexpr int kSettingsWindowHeight = 460;
 
+inline constexpr wchar_t kQmiVersion[] = L"1.0.0";
 inline constexpr wchar_t kQmiAuthorName[] = L"fonlan";
 inline constexpr wchar_t kQmiRepositoryUrl[] = L"https://github.com/fonlan/Qmi";
 

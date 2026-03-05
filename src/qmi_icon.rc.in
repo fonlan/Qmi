@@ -1,1 +1,35 @@
+#include <winver.h>
+
 101 ICON "@QMI_ICON_ICO_RC_PATH@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @QMI_VERSION_MAJOR@,@QMI_VERSION_MINOR@,@QMI_VERSION_PATCH@,@QMI_VERSION_BUILD@
+ PRODUCTVERSION @QMI_VERSION_MAJOR@,@QMI_VERSION_MINOR@,@QMI_VERSION_PATCH@,@QMI_VERSION_BUILD@
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x4L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "fonlan\0"
+            VALUE "FileDescription", "Qmi image viewer\0"
+            VALUE "FileVersion", "@QMI_VERSION@\0"
+            VALUE "InternalName", "Qmi.exe\0"
+            VALUE "OriginalFilename", "Qmi.exe\0"
+            VALUE "ProductName", "Qmi\0"
+            VALUE "ProductVersion", "@QMI_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

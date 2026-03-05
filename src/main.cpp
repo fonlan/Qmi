@@ -2408,8 +2408,19 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 CreateWindowExW(0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
             state->about_icon = CreateWindowExW(
                 0, L"STATIC", nullptr, WS_CHILD | WS_VISIBLE | SS_ICON | SS_CENTERIMAGE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
-            state->about_title =
-                CreateWindowExW(0, L"STATIC", L"Qmi", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, nullptr, nullptr, nullptr);
+            const std::wstring about_title_text = std::wstring(L"Qmi ") + kQmiVersion;
+            state->about_title = CreateWindowExW(0,
+                                                 L"STATIC",
+                                                 about_title_text.c_str(),
+                                                 WS_CHILD | WS_VISIBLE,
+                                                 0,
+                                                 0,
+                                                 0,
+                                                 0,
+                                                 hwnd,
+                                                 nullptr,
+                                                 nullptr,
+                                                 nullptr);
             state->about_description = CreateWindowExW(
                 0,
                 L"STATIC",
