@@ -2063,6 +2063,7 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                                  DEFAULT_PITCH, L"Segoe UI");
             state->about_icon_border_brush = CreateSolidBrush(RGB(198, 203, 211));
+            state->nav_panel_brush = CreateSolidBrush(RGB(244, 246, 249));
 
             state->nav_list = CreateWindowExW(0,
                                               L"LISTBOX",
@@ -2521,6 +2522,35 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 minmax->ptMinTrackSize.y = 320;
             }
             return 0;
+        case WM_ERASEBKGND:
+            if (state) {
+                HDC hdc = reinterpret_cast<HDC>(wparam);
+                RECT client_rect{};
+                GetClientRect(hwnd, &client_rect);
+                FillRect(hdc, &client_rect, GetSysColorBrush(COLOR_WINDOW));
+
+                LONG nav_right = client_rect.left;
+                if (state->nav_divider && IsWindow(state->nav_divider)) {
+                    RECT divider_rect{};
+                    GetWindowRect(state->nav_divider, &divider_rect);
+                    MapWindowPoints(nullptr, hwnd, reinterpret_cast<LPPOINT>(&divider_rect), 2);
+                    nav_right = divider_rect.left;
+                }
+                if (nav_right < client_rect.left) {
+                    nav_right = client_rect.left;
+                } else if (nav_right > client_rect.right) {
+                    nav_right = client_rect.right;
+                }
+                if (nav_right > client_rect.left) {
+                    RECT nav_rect = client_rect;
+                    nav_rect.right = nav_right;
+                    FillRect(hdc,
+                             &nav_rect,
+                             state->nav_panel_brush ? state->nav_panel_brush : GetSysColorBrush(COLOR_WINDOW));
+                }
+                return 1;
+            }
+            break;
         case WM_SIZE:
             LayoutSettingsWindow(hwnd, state);
             return 0;
@@ -2537,7 +2567,9 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             if (state) {
                 auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
                 if (draw && draw->CtlID == kCtrlSettingsNav && draw->CtlType == ODT_LISTBOX) {
-                    FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(COLOR_WINDOW));
+                    FillRect(draw->hDC,
+                             &draw->rcItem,
+                             state->nav_panel_brush ? state->nav_panel_brush : GetSysColorBrush(COLOR_WINDOW));
                     if (draw->itemID == static_cast<UINT>(-1)) {
                         return TRUE;
                     }
@@ -2733,7 +2765,8 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
             if (state && reinterpret_cast<HWND>(lparam) == state->nav_list) {
                 SetTextColor(reinterpret_cast<HDC>(wparam), RGB(43, 48, 59));
                 SetBkMode(reinterpret_cast<HDC>(wparam), TRANSPARENT);
-                return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_WINDOW));
+                return reinterpret_cast<INT_PTR>(state->nav_panel_brush ? state->nav_panel_brush
+                                                                        : GetSysColorBrush(COLOR_WINDOW));
             }
             break;
         case WM_CTLCOLORSTATIC:
@@ -2828,6 +2861,9 @@ LRESULT CALLBACK QmiApp::SettingsWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
                 }
                 if (state->about_icon_border_brush) {
                     DeleteObject(state->about_icon_border_brush);
+                }
+                if (state->nav_panel_brush) {
+                    DeleteObject(state->nav_panel_brush);
                 }
                 delete state;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);

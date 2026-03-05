@@ -102,6 +102,7 @@ struct SettingsWindowState {
     HFONT about_title_font = nullptr;
     HFONT about_link_font = nullptr;
     HBRUSH background_color_preview_brush = nullptr;
+    HBRUSH nav_panel_brush = nullptr;
     HBRUSH about_icon_border_brush = nullptr;
 };
 

@@ -469,7 +469,7 @@ void LayoutSettingsWindow(HWND hwnd, SettingsWindowState* state) {
 
     const int divider_x = kOuterPadding + kNavWidth + kNavDividerGap;
     if (state->nav_divider) {
-        MoveWindow(state->nav_divider, divider_x, kOuterPadding, kDividerWidth, nav_height, TRUE);
+        MoveWindow(state->nav_divider, divider_x, 0, kDividerWidth, client_height, TRUE);
     }
 
     const int panel_x = divider_x + kDividerWidth + kDividerPanelGap;
