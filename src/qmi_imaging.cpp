@@ -7,15 +7,368 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
+#include <cwctype>
 #include <fstream>
 #include <limits>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
 constexpr UINT_PTR kAnimationTimerId = 3;
 constexpr UINT kGifDefaultDelayMs = 100;
 constexpr UINT kGifMinDelayMs = 16;
+
+bool IsAsciiWhitespace(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+std::string TrimAscii(std::string value) {
+    std::size_t first = 0;
+    while (first < value.size() && IsAsciiWhitespace(value[first])) {
+        ++first;
+    }
+    if (first == value.size()) {
+        return {};
+    }
+    std::size_t last = value.size();
+    while (last > first && IsAsciiWhitespace(value[last - 1])) {
+        --last;
+    }
+    return value.substr(first, last - first);
+}
+std::string NormalizeSvgColorToken(std::string value) {
+    value = TrimAscii(value);
+    int red = 0;
+    int green = 0;
+    int blue = 0;
+    if (std::sscanf(value.c_str(), "rgb(%d, %d, %d)", &red, &green, &blue) == 3) {
+        red = std::clamp(red, 0, 255);
+        green = std::clamp(green, 0, 255);
+        blue = std::clamp(blue, 0, 255);
+        char hex[8]{};
+        std::snprintf(hex, sizeof(hex), "#%02x%02x%02x", red, green, blue);
+        return hex;
+    }
+    return value;
+}
+
+std::string NormalizeSvgLightDarkColors(const std::string& svg) {
+    std::string normalized;
+    normalized.reserve(svg.size());
+    std::size_t pos = 0;
+    constexpr std::string_view marker = "light-dark(";
+    while (pos < svg.size()) {
+        const std::size_t start = svg.find(marker, pos);
+        if (start == std::string::npos) {
+            normalized.append(svg, pos, std::string::npos);
+            break;
+        }
+        normalized.append(svg, pos, start - pos);
+        std::size_t scan = start + marker.size();
+        int depth = 1;
+        std::size_t comma = std::string::npos;
+        for (; scan < svg.size(); ++scan) {
+            const char ch = svg[scan];
+            if (ch == '(') {
+                ++depth;
+            } else if (ch == ')') {
+                --depth;
+                if (depth == 0) {
+                    break;
+                }
+            } else if (ch == ',' && depth == 1 && comma == std::string::npos) {
+                comma = scan;
+            }
+        }
+        if (scan >= svg.size() || comma == std::string::npos) {
+            normalized.append(svg, start, std::string::npos);
+            break;
+        }
+        const std::size_t first_start = start + marker.size();
+        normalized.append(NormalizeSvgColorToken(svg.substr(first_start, comma - first_start)));
+        pos = scan + 1;
+    }
+    return normalized;
+}
+
+std::wstring Utf8ToWide(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+    const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    if (length <= 0) {
+        return {};
+    }
+    std::wstring wide(static_cast<std::size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wide.data(), length);
+    return wide;
+}
+
+std::wstring DecodeSvgText(std::string value) {
+    std::wstring decoded;
+    for (std::size_t pos = 0; pos < value.size();) {
+        if (value[pos] == '&') {
+            const std::size_t end = value.find(';', pos + 1);
+            if (end != std::string::npos) {
+                const std::string entity = value.substr(pos + 1, end - pos - 1);
+                if (entity == "amp") {
+                    decoded.push_back(L'&');
+                    pos = end + 1;
+                    continue;
+                }
+                if (entity == "lt") {
+                    decoded.push_back(L'<');
+                    pos = end + 1;
+                    continue;
+                }
+                if (entity == "gt") {
+                    decoded.push_back(L'>');
+                    pos = end + 1;
+                    continue;
+                }
+                if (entity == "quot") {
+                    decoded.push_back(L'\"');
+                    pos = end + 1;
+                    continue;
+                }
+                if (entity == "apos") {
+                    decoded.push_back(L'\'');
+                    pos = end + 1;
+                    continue;
+                }
+            }
+        }
+        const std::size_t next = value.find('&', pos + 1);
+        decoded += Utf8ToWide(value.substr(pos, next == std::string::npos ? std::string::npos : next - pos));
+        if (next == std::string::npos) {
+            break;
+        }
+        pos = next;
+    }
+    return decoded;
+}
+
+std::string GetSvgAttribute(std::string_view tag, std::string_view name) {
+    std::string pattern(name);
+    pattern += "=\"";
+    std::size_t start = tag.find(pattern);
+    if (start == std::string_view::npos) {
+        return {};
+    }
+    start += pattern.size();
+    const std::size_t end = tag.find('"', start);
+    if (end == std::string_view::npos) {
+        return {};
+    }
+    return std::string(tag.substr(start, end - start));
+}
+
+float ParseSvgFloat(const std::string& value, float fallback) {
+    if (value.empty()) {
+        return fallback;
+    }
+    char* end = nullptr;
+    const float parsed = std::strtof(value.c_str(), &end);
+    return end == value.c_str() ? fallback : parsed;
+}
+
+bool TextLooksTruncated(const std::wstring& value) {
+    return value.size() >= 3 && value.substr(value.size() - 3) == L"...";
+}
+
+D2D1_COLOR_F ParseSvgColor(const std::string& value) {
+    if (value.size() == 7 && value[0] == '#') {
+        const unsigned int rgb = static_cast<unsigned int>(std::strtoul(value.c_str() + 1, nullptr, 16));
+        return D2D1::ColorF(rgb, 1.0f);
+    }
+    return D2D1::ColorF(0x000000, 1.0f);
+}
+
+std::string StripSvgTags(std::string value) {
+    for (std::size_t pos = 0; (pos = value.find("<br", pos)) != std::string::npos;) {
+        const std::size_t end = value.find('>', pos);
+        if (end == std::string::npos) {
+            break;
+        }
+        value.replace(pos, end - pos + 1, "\n");
+        ++pos;
+    }
+    std::string stripped;
+    stripped.reserve(value.size());
+    bool in_tag = false;
+    for (char ch : value) {
+        if (ch == '<') {
+            in_tag = true;
+        } else if (ch == '>') {
+            in_tag = false;
+        } else if (!in_tag) {
+            stripped.push_back(ch);
+        }
+    }
+    return stripped;
+}
+
+std::string GetCssPixelValue(std::string_view style, std::string_view name) {
+    std::size_t start = style.find(name);
+    if (start == std::string_view::npos) {
+        return {};
+    }
+    start += name.size();
+    while (start < style.size() && IsAsciiWhitespace(style[start])) {
+        ++start;
+    }
+    if (start >= style.size() || style[start] != ':') {
+        return {};
+    }
+    ++start;
+    while (start < style.size() && IsAsciiWhitespace(style[start])) {
+        ++start;
+    }
+    const std::size_t end = style.find_first_of(";p", start);
+    if (end == std::string_view::npos) {
+        return std::string(style.substr(start));
+    }
+    return std::string(style.substr(start, end - start));
+}
+
+void ParseSvgForeignObjectRuns(const std::string& svg, std::vector<SvgTextRun>* out_texts) {
+    std::size_t pos = 0;
+    while (true) {
+        const std::size_t start = svg.find("<foreignObject", pos);
+        if (start == std::string::npos) {
+            break;
+        }
+        const std::size_t end = svg.find("</foreignObject>", start);
+        if (end == std::string::npos) {
+            break;
+        }
+        const std::size_t fallback_start = svg.find("<text", end);
+        const std::size_t fallback_tag_end = fallback_start == std::string::npos ? std::string::npos : svg.find('>', fallback_start);
+        const std::size_t fallback_close = fallback_tag_end == std::string::npos ? std::string::npos : svg.find("</text>", fallback_tag_end);
+        if (fallback_start == std::string::npos || fallback_tag_end == std::string::npos || fallback_close == std::string::npos) {
+            pos = end + 16;
+            continue;
+        }
+        const std::string block = svg.substr(start, end - start);
+        const std::string_view fallback_tag(svg.data() + fallback_start, fallback_tag_end - fallback_start + 1);
+        const std::wstring fallback_text = DecodeSvgText(svg.substr(fallback_tag_end + 1, fallback_close - fallback_tag_end - 1));
+        const std::size_t outer_style_start = block.find("<div ");
+        if (outer_style_start == std::string::npos) {
+            pos = fallback_close + 7;
+            continue;
+        }
+        const std::size_t outer_style_end = block.find('>', outer_style_start);
+        const std::string_view outer_tag(block.data() + outer_style_start, outer_style_end - outer_style_start + 1);
+        const std::string outer_style = GetSvgAttribute(outer_tag, "style");
+        const float width = ParseSvgFloat(GetCssPixelValue(outer_style, "width"), 0.0f);
+        const float height = ParseSvgFloat(GetCssPixelValue(outer_style, "height"), 0.0f);
+        const std::size_t inner_start = block.rfind("<div ");
+        if (inner_start == std::string::npos || inner_start == outer_style_start) {
+            pos = fallback_close + 7;
+            continue;
+        }
+        const std::size_t inner_tag_end = block.find('>', inner_start);
+        const std::size_t inner_close = block.find("</div>", inner_tag_end);
+        if (inner_tag_end == std::string::npos || inner_close == std::string::npos) {
+            pos = fallback_close + 7;
+            continue;
+        }
+        const std::string_view inner_tag(block.data() + inner_start, inner_tag_end - inner_start + 1);
+        const std::string inner_style = GetSvgAttribute(inner_tag, "style");
+        SvgTextRun run;
+        run.text = DecodeSvgText(StripSvgTags(block.substr(inner_tag_end + 1, inner_close - inner_tag_end - 1)));
+        if (run.text.empty() || (TextLooksTruncated(fallback_text) && width > 2000.0f)) {
+            pos = fallback_close + 7;
+            continue;
+        }
+        run.x = ParseSvgFloat(GetSvgAttribute(fallback_tag, "x"), 0.0f);
+        run.y = ParseSvgFloat(GetSvgAttribute(fallback_tag, "y"), 0.0f);
+        run.font_size = ParseSvgFloat(GetSvgAttribute(fallback_tag, "font-size"), ParseSvgFloat(GetCssPixelValue(inner_style, "font-size"), 12.0f));
+        const std::string fallback_fill = GetSvgAttribute(fallback_tag, "fill");
+        run.fill = ParseSvgColor(fallback_fill.empty() ? NormalizeSvgColorToken(GetCssPixelValue(inner_style, "color")) : fallback_fill);
+        const std::string anchor = GetSvgAttribute(fallback_tag, "text-anchor");
+        run.text_anchor = anchor == "middle" ? 1 : (anchor == "end" ? 2 : 0);
+        const std::string weight = GetSvgAttribute(fallback_tag, "font-weight");
+        run.bold = weight == "bold" || weight == "700" || inner_style.find("font-weight: bold") != std::string::npos ||
+                   block.find("<b>", inner_tag_end) != std::string::npos || block.find("<strong>", inner_tag_end) != std::string::npos;
+        const std::size_t line_count = static_cast<std::size_t>(std::count(run.text.begin(), run.text.end(), L'\n')) + 1;
+        run.width = width > 10.0f ? width : 0.0f;
+        run.height = std::max(height, static_cast<float>(line_count) * run.font_size * 1.35f);
+        run.box = width > 10.0f;
+        out_texts->push_back(std::move(run));
+        pos = fallback_close + 7;
+    }
+}
+
+void ParseSvgFallbackTextRuns(const std::string& svg, std::vector<SvgTextRun>* out_texts) {
+    std::size_t pos = 0;
+    while (true) {
+        const std::size_t tag_start = svg.find("<text", pos);
+        if (tag_start == std::string::npos) {
+            break;
+        }
+        const std::size_t tag_end = svg.find('>', tag_start);
+        const std::size_t close = svg.find("</text>", tag_end == std::string::npos ? tag_start : tag_end);
+        if (tag_end == std::string::npos || close == std::string::npos) {
+            break;
+        }
+        const std::string_view tag(svg.data() + tag_start, tag_end - tag_start + 1);
+        const std::string raw_text = svg.substr(tag_end + 1, close - tag_end - 1);
+        SvgTextRun run;
+        run.text = DecodeSvgText(raw_text);
+        if (run.text.empty() || run.text == L"Text is not SVG - cannot display") {
+            pos = close + 7;
+            continue;
+        }
+        run.x = ParseSvgFloat(GetSvgAttribute(tag, "x"), 0.0f);
+        run.y = ParseSvgFloat(GetSvgAttribute(tag, "y"), 0.0f);
+        run.font_size = ParseSvgFloat(GetSvgAttribute(tag, "font-size"), 12.0f);
+        run.fill = ParseSvgColor(GetSvgAttribute(tag, "fill"));
+        const std::string anchor = GetSvgAttribute(tag, "text-anchor");
+        run.text_anchor = anchor == "middle" ? 1 : (anchor == "end" ? 2 : 0);
+        const std::string weight = GetSvgAttribute(tag, "font-weight");
+        run.bold = weight == "bold" || weight == "700";
+        out_texts->push_back(std::move(run));
+        pos = close + 7;
+    }
+}
+
+void ParseSvgTextRuns(const std::string& svg, std::vector<SvgTextRun>* out_texts) {
+    if (!out_texts) {
+        return;
+    }
+    out_texts->clear();
+    ParseSvgForeignObjectRuns(svg, out_texts);
+    if (out_texts->empty()) {
+        ParseSvgFallbackTextRuns(svg, out_texts);
+    }
+}
+
+HRESULT CreateStreamFromBytes(const std::string& bytes, IStream** out_stream) {
+    if (!out_stream) {
+        return E_POINTER;
+    }
+    *out_stream = nullptr;
+    HGLOBAL global = GlobalAlloc(GMEM_MOVEABLE, bytes.size());
+    if (!global) {
+        return E_OUTOFMEMORY;
+    }
+    void* data = GlobalLock(global);
+    if (!data) {
+        GlobalFree(global);
+        return E_OUTOFMEMORY;
+    }
+    memcpy(data, bytes.data(), bytes.size());
+    GlobalUnlock(global);
+    HRESULT hr = CreateStreamOnHGlobal(global, TRUE, out_stream);
+    if (FAILED(hr)) {
+        GlobalFree(global);
+    }
+    return hr;
+}
 }  // namespace
 
 void QmiApp::ClearAnimationState() {
@@ -545,7 +898,11 @@ HRESULT QmiApp::DecodeGifFrame(size_t frame_index, ID2D1Bitmap1** out_bitmap) {
     return S_OK;
 }
 
-HRESULT QmiApp::LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg, float* out_width, float* out_height) {
+HRESULT QmiApp::LoadSvgDocument(const fs::path& path,
+                                  ID2D1SvgDocument** out_svg,
+                                  float* out_width,
+                                  float* out_height,
+                                  std::vector<SvgTextRun>* out_texts) {
     if (!out_svg || !d2d_context5_) {
         return E_NOINTERFACE;
     }
@@ -558,13 +915,21 @@ HRESULT QmiApp::LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg
         *out_height = 0.0f;
     }
 
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    }
+    const std::string svg((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (svg.empty()) {
+        return E_FAIL;
+    }
+    const std::string normalized_svg = NormalizeSvgLightDarkColors(svg);
+    ParseSvgTextRuns(normalized_svg, out_texts);
     ComPtr<IStream> stream;
-    HRESULT hr = SHCreateStreamOnFileEx(
-        path.c_str(), STGM_READ | STGM_SHARE_DENY_NONE, FILE_ATTRIBUTE_NORMAL, FALSE, nullptr, &stream);
+    HRESULT hr = CreateStreamFromBytes(normalized_svg, &stream);
     if (FAILED(hr)) {
         return hr;
     }
-
     ComPtr<ID2D1SvgDocument> doc;
     // Use a neutral bootstrap viewport first, then normalize to the SVG's own geometry.
     hr = d2d_context5_->CreateSvgDocument(stream.Get(), D2D1::SizeF(1.0f, 1.0f), &doc);

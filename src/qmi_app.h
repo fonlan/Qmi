@@ -70,11 +70,24 @@ struct VisibleThumb {
     D2D1_RECT_F rect{};
 };
 
+struct SvgTextRun {
+    std::wstring text;
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    float font_size = 12.0f;
+    D2D1_COLOR_F fill = D2D1::ColorF(0x000000, 1.0f);
+    int text_anchor = 0;
+    bool bold = false;
+    bool box = false;
+};
 struct LoadedImage {
     ImageType type = ImageType::None;
     fs::path path;
     ComPtr<ID2D1Bitmap1> raster;
     ComPtr<ID2D1SvgDocument> svg;
+    std::vector<SvgTextRun> svg_texts;
     float width = 0.0f;
     float height = 0.0f;
 };
@@ -132,7 +145,11 @@ private:
                            float* out_height);
     HRESULT LoadGifAnimation(const fs::path& path, LoadedImage* out_image);
     HRESULT DecodeGifFrame(size_t frame_index, ID2D1Bitmap1** out_bitmap);
-    HRESULT LoadSvgDocument(const fs::path& path, ID2D1SvgDocument** out_svg, float* out_width, float* out_height);
+    HRESULT LoadSvgDocument(const fs::path& path,
+                            ID2D1SvgDocument** out_svg,
+                            float* out_width,
+                            float* out_height,
+                            std::vector<SvgTextRun>* out_texts = nullptr);
     HRESULT LoadSvgThumbnailBitmap(const fs::path& path,
                                    UINT max_width,
                                    UINT max_height,
@@ -145,6 +162,7 @@ private:
 
     void Render();
     void DrawImageRegion(const D2D1_RECT_F& viewport);
+    void DrawSvgTextRuns();
     void DrawFilmStrip(const D2D1_RECT_F& strip_rect);
     void DrawTopInfoBar(const TitleButtons& buttons);
     void DrawTitleButtons(const TitleButtons& buttons);

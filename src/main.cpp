@@ -1154,10 +1154,60 @@ void QmiApp::DrawImageRegion(const D2D1_RECT_F& viewport) {
         d2d_context_->SetTransform(D2D1::Matrix3x2F::Scale(scale, scale, D2D1::Point2F(0.0f, 0.0f)) *
                                    D2D1::Matrix3x2F::Translation(draw_rect.left, draw_rect.top) * image_transform);
         d2d_context5_->DrawSvgDocument(current_image_.svg.Get());
+        DrawSvgTextRuns();
         d2d_context_->SetTransform(prev);
     }
 
     d2d_context_->PopAxisAlignedClip();
+}
+
+
+void QmiApp::DrawSvgTextRuns() {
+    if (!d2d_context_ || !dwrite_factory_ || current_image_.svg_texts.empty()) {
+        return;
+    }
+    ComPtr<ID2D1SolidColorBrush> text_brush;
+    for (const SvgTextRun& run : current_image_.svg_texts) {
+        if (run.text.empty()) {
+            continue;
+        }
+        ComPtr<IDWriteTextFormat> format;
+        const DWRITE_FONT_WEIGHT weight = run.bold ? DWRITE_FONT_WEIGHT_BOLD : DWRITE_FONT_WEIGHT_NORMAL;
+        if (FAILED(dwrite_factory_->CreateTextFormat(L"Segoe UI",
+                                                     nullptr,
+                                                     weight,
+                                                     DWRITE_FONT_STYLE_NORMAL,
+                                                     DWRITE_FONT_STRETCH_NORMAL,
+                                                     run.font_size,
+                                                     L"zh-CN",
+                                                     &format))) {
+            continue;
+        }
+        format->SetWordWrapping(run.box ? DWRITE_WORD_WRAPPING_WRAP : DWRITE_WORD_WRAPPING_NO_WRAP);
+        format->SetParagraphAlignment(run.box ? DWRITE_PARAGRAPH_ALIGNMENT_CENTER : DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+        format->SetTextAlignment(run.text_anchor == 1 ? DWRITE_TEXT_ALIGNMENT_CENTER
+                                                       : (run.text_anchor == 2 ? DWRITE_TEXT_ALIGNMENT_TRAILING
+                                                                               : DWRITE_TEXT_ALIGNMENT_LEADING));
+        if (!text_brush) {
+            if (FAILED(d2d_context_->CreateSolidColorBrush(run.fill, &text_brush))) {
+                return;
+            }
+        } else {
+            text_brush->SetColor(run.fill);
+        }
+        const float width = run.box ? std::max(1.0f, run.width) : std::max(200.0f, current_image_.width * 2.0f);
+        const float height = run.box ? std::max(run.font_size * 1.6f, run.height) : run.font_size * 2.5f;
+        const float left = run.text_anchor == 1 ? run.x - width * 0.5f : (run.text_anchor == 2 ? run.x - width : run.x);
+        const float top = run.box ? run.y - height * 0.5f : run.y - run.font_size;
+        const D2D1_RECT_F rect = D2D1::RectF(left, top, left + width, top + height);
+        d2d_context_->DrawTextW(run.text.c_str(),
+                                static_cast<UINT32>(run.text.size()),
+                                format.Get(),
+                                rect,
+                                text_brush.Get(),
+                                D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                                DWRITE_MEASURING_MODE_NATURAL);
+    }
 }
 
 void QmiApp::DrawFilmStrip(const D2D1_RECT_F& strip_rect) {

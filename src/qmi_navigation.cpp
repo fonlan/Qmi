@@ -264,7 +264,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     HRESULT hr = E_FAIL;
     if (ext == L".svg") {
         ComPtr<ID2D1SvgDocument> svg;
-        hr = LoadSvgDocument(path, &svg, &image.width, &image.height);
+        hr = LoadSvgDocument(path, &svg, &image.width, &image.height, &image.svg_texts);
         if (SUCCEEDED(hr) && svg) {
             image.type = ImageType::Svg;
             image.svg = svg;
