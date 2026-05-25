@@ -4,6 +4,7 @@
 
 #include <shlwapi.h>
 #include <webp/decode.h>
+#include <webp/demux.h>
 
 #include <algorithm>
 #include <cmath>
@@ -19,7 +20,7 @@
 namespace {
 constexpr UINT_PTR kAnimationTimerId = 3;
 constexpr UINT kGifDefaultDelayMs = 100;
-constexpr UINT kGifMinDelayMs = 16;
+constexpr UINT kAnimationMinDelayMs = 16;
 
 bool IsAsciiWhitespace(char ch) {
     return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
@@ -369,6 +370,156 @@ HRESULT CreateStreamFromBytes(const std::string& bytes, IStream** out_stream) {
     }
     return hr;
 }
+
+UINT NormalizeAnimationDelayMs(int delay_ms) {
+    const UINT normalized = delay_ms > 0 ? static_cast<UINT>(delay_ms) : kGifDefaultDelayMs;
+    return std::max(normalized, kAnimationMinDelayMs);
+}
+
+HRESULT ReadFileBytes(const fs::path& path, std::vector<std::uint8_t>* out_bytes) {
+    if (!out_bytes) {
+        return E_POINTER;
+    }
+    out_bytes->clear();
+
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file) {
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    }
+
+    const std::streamsize file_size = file.tellg();
+    if (file_size <= 0) {
+        return E_FAIL;
+    }
+
+    out_bytes->resize(static_cast<std::size_t>(file_size));
+    file.seekg(0, std::ios::beg);
+    if (!file.read(reinterpret_cast<char*>(out_bytes->data()), file_size)) {
+        out_bytes->clear();
+        return E_FAIL;
+    }
+    return S_OK;
+}
+
+HRESULT CreatePremultipliedBgraBitmap(ID2D1DeviceContext* d2d_context,
+                                      const std::uint8_t* decoded_pixels,
+                                      int decoded_w,
+                                      int decoded_h,
+                                      int decoded_stride,
+                                      ID2D1Bitmap1** out_bitmap) {
+    if (!out_bitmap || !d2d_context) {
+        return E_POINTER;
+    }
+    *out_bitmap = nullptr;
+
+    if (!decoded_pixels || decoded_w <= 0 || decoded_h <= 0) {
+        return E_FAIL;
+    }
+
+    const std::size_t width = static_cast<std::size_t>(decoded_w);
+    const std::size_t height = static_cast<std::size_t>(decoded_h);
+    const std::size_t stride = static_cast<std::size_t>(decoded_stride);
+    if (stride < width * 4u || height > (std::numeric_limits<std::size_t>::max() / 4u) / width) {
+        return E_FAIL;
+    }
+
+    const std::size_t pitch = width * 4u;
+    if (pitch > std::numeric_limits<UINT32>::max()) {
+        return E_FAIL;
+    }
+
+    std::vector<std::uint8_t> premul_bgra(pitch * height);
+    for (int y = 0; y < decoded_h; ++y) {
+        const auto* src_row = decoded_pixels + static_cast<std::size_t>(y) * stride;
+        auto* dst_row = premul_bgra.data() + static_cast<std::size_t>(y) * pitch;
+        for (int x = 0; x < decoded_w; ++x) {
+            const std::uint8_t b = src_row[x * 4 + 0];
+            const std::uint8_t g = src_row[x * 4 + 1];
+            const std::uint8_t r = src_row[x * 4 + 2];
+            const std::uint8_t a = src_row[x * 4 + 3];
+            if (a == 255) {
+                dst_row[x * 4 + 0] = b;
+                dst_row[x * 4 + 1] = g;
+                dst_row[x * 4 + 2] = r;
+            } else {
+                dst_row[x * 4 + 0] = static_cast<std::uint8_t>((static_cast<unsigned>(b) * a + 127u) / 255u);
+                dst_row[x * 4 + 1] = static_cast<std::uint8_t>((static_cast<unsigned>(g) * a + 127u) / 255u);
+                dst_row[x * 4 + 2] = static_cast<std::uint8_t>((static_cast<unsigned>(r) * a + 127u) / 255u);
+            }
+            dst_row[x * 4 + 3] = a;
+        }
+    }
+
+    const D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    return d2d_context->CreateBitmap(D2D1::SizeU(static_cast<UINT32>(decoded_w), static_cast<UINT32>(decoded_h)),
+                                     premul_bgra.data(),
+                                     static_cast<UINT32>(pitch),
+                                     &props,
+                                     out_bitmap);
+}
+
+HRESULT DecodeFirstWebpAnimationFrame(const std::vector<std::uint8_t>& encoded,
+                                      ID2D1DeviceContext* d2d_context,
+                                      ID2D1Bitmap1** out_bitmap,
+                                      float* out_width,
+                                      float* out_height) {
+    if (!out_bitmap || !d2d_context) {
+        return E_POINTER;
+    }
+    *out_bitmap = nullptr;
+    if (out_width) {
+        *out_width = 0.0f;
+    }
+    if (out_height) {
+        *out_height = 0.0f;
+    }
+
+    WebPData webp_data{};
+    webp_data.bytes = encoded.data();
+    webp_data.size = encoded.size();
+
+    WebPAnimDecoderOptions options{};
+    if (!WebPAnimDecoderOptionsInit(&options)) {
+        return E_FAIL;
+    }
+    options.color_mode = MODE_BGRA;
+
+    WebPAnimDecoder* decoder = WebPAnimDecoderNew(&webp_data, &options);
+    if (!decoder) {
+        return E_FAIL;
+    }
+
+    WebPAnimInfo info{};
+    HRESULT hr = S_OK;
+    if (!WebPAnimDecoderGetInfo(decoder, &info) || info.canvas_width == 0 || info.canvas_height == 0 ||
+        info.canvas_width > static_cast<uint32_t>(std::numeric_limits<int>::max() / 4u) ||
+        info.canvas_height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        hr = E_FAIL;
+    } else {
+        std::uint8_t* frame_pixels = nullptr;
+        int timestamp_ms = 0;
+        if (!WebPAnimDecoderGetNext(decoder, &frame_pixels, &timestamp_ms) || !frame_pixels) {
+            hr = E_FAIL;
+        } else {
+            const int canvas_width = static_cast<int>(info.canvas_width);
+            const int canvas_height = static_cast<int>(info.canvas_height);
+            hr = CreatePremultipliedBgraBitmap(
+                d2d_context, frame_pixels, canvas_width, canvas_height, canvas_width * 4, out_bitmap);
+            if (SUCCEEDED(hr)) {
+                if (out_width) {
+                    *out_width = static_cast<float>(canvas_width);
+                }
+                if (out_height) {
+                    *out_height = static_cast<float>(canvas_height);
+                }
+            }
+        }
+    }
+
+    WebPAnimDecoderDelete(decoder);
+    return hr;
+}
 }  // namespace
 
 void QmiApp::ClearAnimationState() {
@@ -376,6 +527,11 @@ void QmiApp::ClearAnimationState() {
         KillTimer(hwnd_, kAnimationTimerId);
     }
     animation_decoder_.Reset();
+    if (webp_animation_decoder_) {
+        WebPAnimDecoderDelete(webp_animation_decoder_);
+        webp_animation_decoder_ = nullptr;
+    }
+    webp_animation_bytes_.clear();
     animation_frame_descriptors_.clear();
     animation_frame_delays_ms_.clear();
     animation_frame_index_ = 0;
@@ -393,7 +549,7 @@ void QmiApp::ClearAnimationState() {
 }
 
 void QmiApp::ScheduleNextAnimationFrame() {
-    if (!hwnd_ || !animation_decoder_ || animation_frame_delays_ms_.size() <= 1 ||
+    if (!hwnd_ || (!animation_decoder_ && !webp_animation_decoder_) || animation_frame_delays_ms_.size() <= 1 ||
         animation_frame_index_ >= animation_frame_delays_ms_.size()) {
         return;
     }
@@ -419,25 +575,29 @@ HRESULT QmiApp::LoadWebpBitmap(const fs::path& path,
         *out_height = 0.0f;
     }
 
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file) {
-        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    std::vector<std::uint8_t> encoded;
+    HRESULT hr = ReadFileBytes(path, &encoded);
+    if (FAILED(hr)) {
+        return hr;
     }
 
-    const std::streamsize file_size = file.tellg();
-    if (file_size <= 0) {
+    WebPDecoderConfig config{};
+    if (!WebPInitDecoderConfig(&config)) {
         return E_FAIL;
     }
 
-    std::vector<std::uint8_t> encoded(static_cast<std::size_t>(file_size));
-    file.seekg(0, std::ios::beg);
-    if (!file.read(reinterpret_cast<char*>(encoded.data()), file_size)) {
+    const VP8StatusCode features_status = WebPGetFeatures(encoded.data(), encoded.size(), &config.input);
+    if (features_status != VP8_STATUS_OK) {
         return E_FAIL;
     }
 
-    int src_w = 0;
-    int src_h = 0;
-    if (!WebPGetInfo(encoded.data(), encoded.size(), &src_w, &src_h) || src_w <= 0 || src_h <= 0) {
+    if (config.input.has_animation) {
+        return DecodeFirstWebpAnimationFrame(encoded, d2d_context_.Get(), out_bitmap, out_width, out_height);
+    }
+
+    const int src_w = config.input.width;
+    const int src_h = config.input.height;
+    if (src_w <= 0 || src_h <= 0) {
         return E_FAIL;
     }
 
@@ -449,16 +609,6 @@ HRESULT QmiApp::LoadWebpBitmap(const fs::path& path,
                                       static_cast<double>(max_height) / static_cast<double>(src_h));
         target_w = std::max(1, static_cast<int>(std::lround(static_cast<double>(src_w) * ratio)));
         target_h = std::max(1, static_cast<int>(std::lround(static_cast<double>(src_h) * ratio)));
-    }
-
-    WebPDecoderConfig config{};
-    if (!WebPInitDecoderConfig(&config)) {
-        return E_FAIL;
-    }
-
-    const VP8StatusCode features_status = WebPGetFeatures(encoded.data(), encoded.size(), &config.input);
-    if (features_status != VP8_STATUS_OK) {
-        return E_FAIL;
     }
 
     config.output.colorspace = MODE_BGRA;
@@ -478,42 +628,8 @@ HRESULT QmiApp::LoadWebpBitmap(const fs::path& path,
     const int decoded_h = config.output.height;
     const auto* decoded_pixels = config.output.u.RGBA.rgba;
     const int decoded_stride = config.output.u.RGBA.stride;
-    if (!decoded_pixels || decoded_w <= 0 || decoded_h <= 0 || decoded_stride < decoded_w * 4) {
-        WebPFreeDecBuffer(&config.output);
-        return E_FAIL;
-    }
-
-    std::vector<std::uint8_t> premul_bgra(static_cast<std::size_t>(decoded_w) * static_cast<std::size_t>(decoded_h) * 4);
-    for (int y = 0; y < decoded_h; ++y) {
-        const auto* src_row = decoded_pixels + static_cast<std::size_t>(y) * static_cast<std::size_t>(decoded_stride);
-        auto* dst_row = premul_bgra.data() + static_cast<std::size_t>(y) * static_cast<std::size_t>(decoded_w) * 4;
-        for (int x = 0; x < decoded_w; ++x) {
-            const std::uint8_t b = src_row[x * 4 + 0];
-            const std::uint8_t g = src_row[x * 4 + 1];
-            const std::uint8_t r = src_row[x * 4 + 2];
-            const std::uint8_t a = src_row[x * 4 + 3];
-            if (a == 255) {
-                dst_row[x * 4 + 0] = b;
-                dst_row[x * 4 + 1] = g;
-                dst_row[x * 4 + 2] = r;
-            } else {
-                dst_row[x * 4 + 0] = static_cast<std::uint8_t>((static_cast<unsigned>(b) * a + 127u) / 255u);
-                dst_row[x * 4 + 1] = static_cast<std::uint8_t>((static_cast<unsigned>(g) * a + 127u) / 255u);
-                dst_row[x * 4 + 2] = static_cast<std::uint8_t>((static_cast<unsigned>(r) * a + 127u) / 255u);
-            }
-            dst_row[x * 4 + 3] = a;
-        }
-    }
-
+    hr = CreatePremultipliedBgraBitmap(d2d_context_.Get(), decoded_pixels, decoded_w, decoded_h, decoded_stride, out_bitmap);
     WebPFreeDecBuffer(&config.output);
-
-    D2D1_BITMAP_PROPERTIES1 props = D2D1::BitmapProperties1(
-        D2D1_BITMAP_OPTIONS_NONE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
-    const HRESULT hr = d2d_context_->CreateBitmap(D2D1::SizeU(static_cast<UINT32>(decoded_w), static_cast<UINT32>(decoded_h)),
-                                                  premul_bgra.data(),
-                                                  static_cast<UINT32>(decoded_w * 4),
-                                                  &props,
-                                                  out_bitmap);
     if (FAILED(hr)) {
         return hr;
     }
@@ -525,6 +641,121 @@ HRESULT QmiApp::LoadWebpBitmap(const fs::path& path,
         *out_height = static_cast<float>(decoded_h);
     }
     return S_OK;
+}
+
+HRESULT QmiApp::LoadWebpAnimation(const fs::path& path, LoadedImage* out_image) {
+    if (!out_image || !d2d_context_) {
+        return E_POINTER;
+    }
+
+    ClearAnimationState();
+
+    std::vector<std::uint8_t> encoded;
+    HRESULT hr = ReadFileBytes(path, &encoded);
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    WebPData webp_data{};
+    webp_data.bytes = encoded.data();
+    webp_data.size = encoded.size();
+
+    WebPDemuxer* demux = WebPDemux(&webp_data);
+    if (!demux) {
+        return E_FAIL;
+    }
+
+    const uint32_t frame_count = WebPDemuxGetI(demux, WEBP_FF_FRAME_COUNT);
+    if (frame_count <= 1) {
+        WebPDemuxDelete(demux);
+        return S_FALSE;
+    }
+
+    std::vector<UINT> frame_delays;
+    frame_delays.reserve(frame_count);
+    for (uint32_t i = 1; i <= frame_count; ++i) {
+        WebPIterator iter{};
+        if (!WebPDemuxGetFrame(demux, static_cast<int>(i), &iter)) {
+            WebPDemuxDelete(demux);
+            return E_FAIL;
+        }
+        frame_delays.push_back(NormalizeAnimationDelayMs(iter.duration));
+        WebPDemuxReleaseIterator(&iter);
+    }
+    WebPDemuxDelete(demux);
+
+    WebPAnimDecoderOptions options{};
+    if (!WebPAnimDecoderOptionsInit(&options)) {
+        return E_FAIL;
+    }
+    options.color_mode = MODE_BGRA;
+
+    webp_animation_bytes_ = std::move(encoded);
+    WebPData animation_data{};
+    animation_data.bytes = webp_animation_bytes_.data();
+    animation_data.size = webp_animation_bytes_.size();
+
+    webp_animation_decoder_ = WebPAnimDecoderNew(&animation_data, &options);
+    if (!webp_animation_decoder_) {
+        ClearAnimationState();
+        return E_FAIL;
+    }
+
+    WebPAnimInfo info{};
+    if (!WebPAnimDecoderGetInfo(webp_animation_decoder_, &info) || info.frame_count <= 1 ||
+        info.frame_count != frame_delays.size() || info.canvas_width == 0 || info.canvas_height == 0 ||
+        info.canvas_width > static_cast<uint32_t>(std::numeric_limits<int>::max() / 4u) ||
+        info.canvas_height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        ClearAnimationState();
+        return E_FAIL;
+    }
+
+    animation_frame_delays_ms_ = std::move(frame_delays);
+    animation_canvas_width_ = info.canvas_width;
+    animation_canvas_height_ = info.canvas_height;
+    animation_canvas_stride_ = info.canvas_width * 4u;
+
+    ComPtr<ID2D1Bitmap1> first_frame;
+    hr = DecodeWebpAnimationFrame(0, &first_frame);
+    if (FAILED(hr) || !first_frame) {
+        ClearAnimationState();
+        return FAILED(hr) ? hr : E_FAIL;
+    }
+
+    out_image->type = ImageType::Raster;
+    out_image->raster = first_frame;
+    out_image->width = static_cast<float>(animation_canvas_width_);
+    out_image->height = static_cast<float>(animation_canvas_height_);
+    animation_frame_index_ = 0;
+    return S_OK;
+}
+
+HRESULT QmiApp::DecodeWebpAnimationFrame(size_t frame_index, ID2D1Bitmap1** out_bitmap) {
+    if (!out_bitmap || !d2d_context_ || !webp_animation_decoder_ || frame_index >= animation_frame_delays_ms_.size() ||
+        animation_canvas_width_ == 0 || animation_canvas_height_ == 0 || animation_canvas_stride_ == 0 ||
+        animation_canvas_width_ > static_cast<UINT>(std::numeric_limits<int>::max()) ||
+        animation_canvas_height_ > static_cast<UINT>(std::numeric_limits<int>::max()) ||
+        animation_canvas_stride_ > static_cast<UINT>(std::numeric_limits<int>::max())) {
+        return E_POINTER;
+    }
+
+    *out_bitmap = nullptr;
+    if (frame_index == 0) {
+        WebPAnimDecoderReset(webp_animation_decoder_);
+    }
+
+    std::uint8_t* frame_pixels = nullptr;
+    int timestamp_ms = 0;
+    if (!WebPAnimDecoderGetNext(webp_animation_decoder_, &frame_pixels, &timestamp_ms) || !frame_pixels) {
+        return E_FAIL;
+    }
+
+    return CreatePremultipliedBgraBitmap(d2d_context_.Get(),
+                                         frame_pixels,
+                                         static_cast<int>(animation_canvas_width_),
+                                         static_cast<int>(animation_canvas_height_),
+                                         static_cast<int>(animation_canvas_stride_),
+                                         out_bitmap);
 }
 
 HRESULT QmiApp::LoadRasterBitmap(const fs::path& path,
@@ -751,7 +982,7 @@ HRESULT QmiApp::LoadGifAnimation(const fs::path& path, LoadedImage* out_image) {
         }
 
         ULONGLONG delay_ms = frame_delay_cs > 0 ? static_cast<ULONGLONG>(frame_delay_cs) * 10ull : kGifDefaultDelayMs;
-        delay_ms = std::max<ULONGLONG>(delay_ms, kGifMinDelayMs);
+        delay_ms = std::max<ULONGLONG>(delay_ms, kAnimationMinDelayMs);
         if (delay_ms > std::numeric_limits<UINT>::max()) {
             delay_ms = std::numeric_limits<UINT>::max();
         }

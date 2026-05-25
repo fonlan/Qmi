@@ -1940,14 +1940,17 @@ LRESULT QmiApp::HandleMessage(UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_TIMER:
             if (wparam == kAnimationTimerId) {
                 KillTimer(hwnd_, kAnimationTimerId);
-                if (!animation_decoder_ || animation_frame_delays_ms_.size() <= 1 || current_image_.type != ImageType::Raster) {
+                if ((!animation_decoder_ && !webp_animation_decoder_) || animation_frame_delays_ms_.size() <= 1 ||
+                    current_image_.type != ImageType::Raster) {
                     return 0;
                 }
                 const size_t frame_count = animation_frame_delays_ms_.size();
                 const size_t next_index = (animation_frame_index_ + 1) % frame_count;
 
                 ComPtr<ID2D1Bitmap1> next_frame;
-                if (FAILED(DecodeGifFrame(next_index, &next_frame)) || !next_frame) {
+                const HRESULT hr = webp_animation_decoder_ ? DecodeWebpAnimationFrame(next_index, &next_frame)
+                                                           : DecodeGifFrame(next_index, &next_frame);
+                if (FAILED(hr) || !next_frame) {
                     ClearAnimationState();
                     return 0;
                 }

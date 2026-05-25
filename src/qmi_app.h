@@ -24,6 +24,8 @@
 namespace fs = std::filesystem;
 using Microsoft::WRL::ComPtr;
 
+struct WebPAnimDecoder;
+
 enum class ImageType {
     None,
     Broken,
@@ -143,6 +145,8 @@ private:
                            ID2D1Bitmap1** out_bitmap,
                            float* out_width,
                            float* out_height);
+    HRESULT LoadWebpAnimation(const fs::path& path, LoadedImage* out_image);
+    HRESULT DecodeWebpAnimationFrame(size_t frame_index, ID2D1Bitmap1** out_bitmap);
     HRESULT LoadGifAnimation(const fs::path& path, LoadedImage* out_image);
     HRESULT DecodeGifFrame(size_t frame_index, ID2D1Bitmap1** out_bitmap);
     HRESULT LoadSvgDocument(const fs::path& path,
@@ -310,6 +314,8 @@ private:
     std::wstring deferred_directory_target_norm_;
     bool bitmaps_need_reload_ = false;
     ComPtr<IWICBitmapDecoder> animation_decoder_;
+    WebPAnimDecoder* webp_animation_decoder_ = nullptr;
+    std::vector<std::uint8_t> webp_animation_bytes_;
     std::vector<GifFrameDescriptor> animation_frame_descriptors_;
     std::vector<UINT> animation_frame_delays_ms_;
     size_t animation_frame_index_ = 0;

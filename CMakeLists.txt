@@ -74,6 +74,7 @@ target_compile_definitions(Qmi PRIVATE
 
 target_link_libraries(Qmi PRIVATE
     webp
+    webpdemux
     d2d1
     d3d11
     dxgi

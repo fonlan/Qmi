@@ -272,6 +272,16 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
     } else {
         if (IsGifExtension(path)) {
             hr = LoadGifAnimation(path, &image);
+        } else if (IsWebpExtension(path)) {
+            hr = LoadWebpAnimation(path, &image);
+            if (hr == S_FALSE) {
+                ComPtr<ID2D1Bitmap1> bmp;
+                hr = LoadRasterBitmap(path, 0, 0, &bmp, &image.width, &image.height);
+                if (SUCCEEDED(hr) && bmp) {
+                    image.type = ImageType::Raster;
+                    image.raster = bmp;
+                }
+            }
         } else {
             ComPtr<ID2D1Bitmap1> bmp;
             hr = LoadRasterBitmap(path, 0, 0, &bmp, &image.width, &image.height);
@@ -313,7 +323,7 @@ bool QmiApp::LoadImageByIndex(int index, bool reset_view) {
         ResetView();
     }
 
-    if (animation_decoder_ && animation_frame_delays_ms_.size() > 1) {
+    if ((animation_decoder_ || webp_animation_decoder_) && animation_frame_delays_ms_.size() > 1) {
         ScheduleNextAnimationFrame();
     }
 
